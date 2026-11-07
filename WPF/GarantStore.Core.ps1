@@ -39,6 +39,7 @@ $moduleFiles = @(
     'GarantStore.State.ps1',
     'GarantStore.Deployment.ps1',
     'GarantStore.Store.ps1',
+    'GarantStore.Bundles.ps1',
     'GarantStore.Diagnostics.ps1'
 )
 
@@ -192,71 +193,41 @@ try {
             $agreementConsent = if ($request.PSObject.Properties.Name -contains 'AgreementConsent') { [bool]$request.AgreementConsent } else { $false }
             $allowServiceChanges = if ($request.PSObject.Properties.Name -contains 'AllowServiceChanges') { [bool]$request.AllowServiceChanges } else { $false }
 
-            if (-not (Test-GSValidPackageId -Id $id) -or $source -notin @('msstore','winget')) {
-                throw (New-GSClassifiedException -Code 'InternalError' -Message 'Invalid selected package identity.')
-            }
+            $installed = Invoke-GSPackageInstall `
+                -Id $id `
+                -Source $source `
+                -Name $name `
+                -KnownStatus $knownStatus `
+                -AvailableVersion $availableVersion `
+                -AgreementConsent $agreementConsent `
+                -AllowServiceChanges $allowServiceChanges
 
-            if ($source -eq 'msstore') {
-                $storeResult = Invoke-GSStorePackagePipeline `
-                    -Id $id `
-                    -Name $name `
-                    -KnownStatus $knownStatus `
-                    -AvailableVersion $availableVersion `
-                    -AgreementConsent $agreementConsent `
-                    -AllowServiceChanges $allowServiceChanges
+            $finalResult = New-GSResult `
+                -Success $true `
+                -Status ([string]$installed.Status) `
+                -Message ([string]$installed.Message) `
+                -PackageId $id `
+                -Source $source `
+                -OldVersion ([string]$installed.OldVersion) `
+                -NewVersion ([string]$installed.NewVersion) `
+                -Data $installed.Data
+        }
 
-                $before = $storeResult.Before
-                $after = $storeResult.After
-                $storeMessage = switch ([string]$storeResult.Outcome) {
-                    'AlreadyCurrent' { 'The selected Microsoft Store application is already installed and current.'; break }
-                    'StoreUpdateUnknown' { 'The application is installed, but update availability could not be confirmed. No changes were made.'; break }
-                    'UpdateVerified' { 'The Microsoft Store update was installed and verified.'; break }
-                    'InstalledVerified' { 'The Microsoft Store application was installed and verified.'; break }
-                    default { 'The Microsoft Store operation completed.' }
-                }
+        'bundlestate' {
+            $accept = [bool]$request.AcceptAgreements
+            $states = @(Get-GSBundleStates -Items @($request.Items) -AcceptAgreements $accept)
+            $finalResult = New-GSResult -Success $true -Status 'BundleStateReady' -Message ('Bundle state resolved. Items=' + $states.Count) -Data ([pscustomobject]@{ Results = $states })
+            $finalResult | Add-Member -NotePropertyName Results -NotePropertyValue $states
+        }
 
-                $finalResult = New-GSResult `
-                    -Success $true `
-                    -Status ([string]$storeResult.Outcome) `
-                    -Message $storeMessage `
-                    -PackageId $id `
-                    -Source $source `
-                    -OldVersion ([string]$before.InstalledVersion) `
-                    -NewVersion ([string]$after.InstalledVersion) `
-                    -Data $storeResult
-
-                break
-            }
-
-            if (-not $agreementConsent) {
-                throw (New-GSClassifiedException -Code 'PackageAgreementsRequired' -Message 'Explicit per-operation consent is required for package installation.')
-            }
-
-            [void](Confirm-GSWingetPackage -Id $id -Source $source -AcceptAgreements $true)
-            $before = Get-GSExactPackageState -Id $id -Source $source -AcceptAgreements $true
-
-            if ($before.Status -eq 'Installed') {
-                $finalResult = New-GSResult -Success $true -Status 'AlreadyCurrent' -Message 'The selected application is already installed and current.' -PackageId $id -Source $source -OldVersion $before.InstalledVersion -NewVersion $before.InstalledVersion
-                break
-            }
-
-            if ($before.Status -eq 'Unknown') {
-                throw (New-GSClassifiedException -Code 'InternalError' -Message 'Installed state could not be verified. System modification was blocked.')
-            }
-
-            $command = if ($before.Status -eq 'UpdateAvailable') { 'upgrade' } else { 'install' }
-            [void](Ensure-GSAgreementCapabilities -Command $command)
-            [void](Invoke-GSWingetPackageAction -Command $command -Id $id -Source $source -AgreementConsent $true -Silent)
-
+        'bundle' {
+            $agreementConsent = if ($request.PSObject.Properties.Name -contains 'AgreementConsent') { [bool]$request.AgreementConsent } else { $false }
+            $allowServiceChanges = if ($request.PSObject.Properties.Name -contains 'AllowServiceChanges') { [bool]$request.AllowServiceChanges } else { $false }
+            $bundle = Invoke-GSBundleInstall -Items @($request.Items) -AgreementConsent $agreementConsent -AllowServiceChanges $allowServiceChanges
             Clear-GSInventoryCache
-            $after = Get-GSExactPackageState -Id $id -Source $source -AcceptAgreements $true
-
-            if ($after.Status -eq 'NotInstalled' -or $after.Status -eq 'Unknown' -or $after.Status -eq 'UpdateAvailable') {
-                throw (New-GSClassifiedException -Code 'DeploymentFailure' -Message 'Post-action verification failed for the selected package.')
-            }
-
-            $status = if ($command -eq 'upgrade') { 'UpdateVerified' } else { 'InstalledVerified' }
-            $finalResult = New-GSResult -Success $true -Status $status -Message ('Package action verified: ' + $id) -PackageId $id -Source $source -OldVersion $before.InstalledVersion -NewVersion $after.InstalledVersion
+            $bundleStatus = if ($bundle.Failed -eq 0) { 'BundleCompleted' } else { 'BundlePartial' }
+            $finalResult = New-GSResult -Success ($bundle.Failed -eq 0) -Status $bundleStatus -ErrorCode $(if ($bundle.Failed -eq 0) { '' } else { 'BundlePartial' }) -Message ('Bundle finished. Installed=' + $bundle.Installed + '; AlreadyPresent=' + $bundle.AlreadyPresent + '; Failed=' + $bundle.Failed) -Data $bundle
+            if ($bundle.Failed -gt 0) { $exitCode = 1 }
         }
 
         'local' {

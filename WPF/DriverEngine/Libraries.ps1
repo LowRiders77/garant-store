@@ -40,6 +40,59 @@ function Get-ValidMicrosoftInstaller([string]$url,[string]$name){
  if(Publish-GSUserCopy -Path $path -UserDirectory $script:LibraryDir){Write-LibraryLog ('Копия сохранена в «'+$script:LibraryDir+'»')}
  return $path
 }
+# Components without a direct Microsoft download link are installed from their
+# official WinGet packages (hash-verified by WinGet). IDs are checked in CI.
+$script:GSLibraryWingetIds=@{
+ 'dotnet-desktop'='Microsoft.DotNet.DesktopRuntime.8'
+ 'dotnet-desktop-10'='Microsoft.DotNet.DesktopRuntime.10'
+ 'windows-app-runtime'='Microsoft.WindowsAppRuntime.1.8'
+ 'physx'='Nvidia.PhysX'
+ 'physx-legacy'='Nvidia.PhysXLegacy'
+ 'openal'='CreativeTechnology.OpenAL'
+}
+function Get-GSLibraryWingetPath {
+ $command=Get-Command winget.exe -ErrorAction SilentlyContinue
+ if($command -and $command.Source){return [string]$command.Source}
+ try{
+  $package=Get-AppxPackage -Name Microsoft.DesktopAppInstaller -ErrorAction Stop|Sort-Object Version -Descending|Select-Object -First 1
+  if($package){$candidate=Join-Path $package.InstallLocation 'winget.exe';if(Test-Path -LiteralPath $candidate){return $candidate}}
+ }catch{}
+ throw 'WinGet не найден. Восстановите WinGet в разделе «Восстановить WinGet» и повторите.'
+}
+function Get-GSVcRedistVerb([string]$Arch){
+ # An installed runtime is repaired in place (fixes damaged MSVCP/VCRUNTIME DLLs).
+ $row=Get-SystemLibrarySuggestions|Where-Object{$_.instanceId -eq ('LIBRARY|vcredist-'+$Arch)}|Select-Object -First 1
+ if($row -and $row.libraryStatus -eq 'Установлено'){Write-LibraryLog ('Visual C++ '+$Arch+' установлен: выполняется восстановление');return '/repair'}
+ return '/install'
+}
+function Install-GSWingetLibrary([string]$Id){
+ $packageId=$script:GSLibraryWingetIds[$Id]
+ if(-not $packageId){throw ('Для '+$Id+' не настроен пакет WinGet')}
+ $winget=Get-GSLibraryWingetPath
+ if($Mode -eq 'download'){
+  Set-LibraryStatus 'Загрузка библиотек' ('Скачиваем '+$packageId)
+  [void][IO.Directory]::CreateDirectory($script:LibraryDir)
+  $output=& $winget download --id $packageId --exact --source winget --download-directory $script:LibraryDir --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1|Out-String
+  if($LASTEXITCODE -ne 0){throw ('WinGet не скачал '+$packageId+' (код '+$LASTEXITCODE+'). '+$output.Trim())}
+  $script:LibraryTask.downloaded++;$script:LibraryTask.finished++
+  Write-LibraryLog ('Пакет '+$packageId+' скачан в «'+$script:LibraryDir+'»; установка не запускалась')
+  return
+ }
+ Set-LibraryStatus 'Установка библиотек' ('Устанавливаем '+$packageId)
+ Write-LibraryLog ('WinGet: установка '+$packageId)
+ $output=& $winget install --id $packageId --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1|Out-String
+ $code=$LASTEXITCODE
+ Write-LibraryLog ('WinGet завершился с кодом '+$code)
+ if($code -in @(3010,1641)){$script:LibraryTask.needReboot=$true}
+ # The exit code alone is not proof: confirm through the same detection the list uses.
+ $row=Get-SystemLibrarySuggestions|Where-Object{$_.instanceId -eq ('LIBRARY|'+$Id)}|Select-Object -First 1
+ if(-not $row -or $row.libraryStatus -ne 'Установлено'){
+  if($script:LibraryTask.needReboot){Write-LibraryLog ($packageId+' требует перезагрузки для завершения установки');$script:LibraryTask.finished++;return}
+  throw ('Windows не подтвердила установку '+$packageId+' (код WinGet '+$code+'). '+(($output -split "`r?`n"|Where-Object{$_.Trim()}|Select-Object -Last 3) -join ' '))
+ }
+ $script:LibraryTask.downloaded++;$script:LibraryTask.finished++
+ Write-LibraryLog ('Установлено и подтверждено: '+$packageId)
+}
 function Install-MicrosoftRuntime([string]$Id,[string]$Url,[string]$File,[string[]]$Arguments){
  if($Id -eq 'webview2'){
   $before=Get-GSWebView2State
@@ -53,7 +106,9 @@ function Install-MicrosoftRuntime([string]$Id,[string]$Url,[string]$File,[string
  $script:LibraryTask.downloaded++
  Set-LibraryStatus 'Установка библиотек' ('Устанавливаем '+$Id)
  $process=Start-Process -FilePath $installer -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
- if($process.ExitCode -notin @(0,3010,1641)){throw ($Id+' завершился с кодом '+$process.ExitCode)}
+ # 1638: a newer Visual C++ build is already installed - the runtime is present.
+ if($process.ExitCode -eq 1638 -and $Id -like 'vcredist-*'){Write-LibraryLog ($Id+': установлена более новая версия; переустановка не требуется')}
+ elseif($process.ExitCode -notin @(0,3010,1641)){throw ($Id+' завершился с кодом '+$process.ExitCode)}
  if($process.ExitCode -in @(3010,1641)){$script:LibraryTask.needReboot=$true}
  if($Id -eq 'webview2'){
   # EdgeUpdate may register the new runtime shortly after setup.exe exits.
@@ -79,13 +134,14 @@ function Install-MicrosoftRuntime([string]$Id,[string]$Url,[string]$File,[string
 try{
  [IO.File]::WriteAllText($script:LatestLog,("Garant-PO libraries | "+(Get-Date)+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
  $selection=@(Load-JsonFile (Join-Path $script:StateDir 'selection.json') @()|ForEach-Object{[string]$_})
- $allowed=@('vcredist-x64','vcredist-x86','directx-legacy','netfx3','webview2')
+ $allowed=@('vcredist-x64','vcredist-x86','directx-legacy','netfx3','webview2')+@($script:GSLibraryWingetIds.Keys)
  $selection=@($selection|Where-Object{$allowed -contains $_}|Select-Object -Unique)
  if($selection.Count -eq 0){throw 'Не выбраны системные библиотеки для установки'}
  $script:LibraryTask.total=$selection.Count;$script:LibraryTask.remaining=$selection.Count
  foreach($id in $selection){
   try{
-   if($Mode -eq 'download'){
+   if($Mode -eq 'download' -and $script:GSLibraryWingetIds.ContainsKey($id)){Install-GSWingetLibrary $id}
+   elseif($Mode -eq 'download'){
     switch($id){
      'vcredist-x64'{$null=Get-ValidMicrosoftInstaller 'https://aka.ms/vs/17/release/vc_redist.x64.exe' 'vc_redist.x64.exe'}
      'vcredist-x86'{$null=Get-ValidMicrosoftInstaller 'https://aka.ms/vs/17/release/vc_redist.x86.exe' 'vc_redist.x86.exe'}
@@ -97,8 +153,8 @@ try{
     Write-LibraryLog ('Файлы '+$id+' скачаны и проверены; установка не запускалась')
    }else{
    switch($id){
-    'vcredist-x64'{Install-MicrosoftRuntime $id 'https://aka.ms/vs/17/release/vc_redist.x64.exe' 'vc_redist.x64.exe' @('/install','/quiet','/norestart')}
-    'vcredist-x86'{Install-MicrosoftRuntime $id 'https://aka.ms/vs/17/release/vc_redist.x86.exe' 'vc_redist.x86.exe' @('/install','/quiet','/norestart')}
+    'vcredist-x64'{Install-MicrosoftRuntime $id 'https://aka.ms/vs/17/release/vc_redist.x64.exe' 'vc_redist.x64.exe' @((Get-GSVcRedistVerb 'x64'),'/quiet','/norestart')}
+    'vcredist-x86'{Install-MicrosoftRuntime $id 'https://aka.ms/vs/17/release/vc_redist.x86.exe' 'vc_redist.x86.exe' @((Get-GSVcRedistVerb 'x86'),'/quiet','/norestart')}
     'directx-legacy'{Install-MicrosoftRuntime $id 'https://download.microsoft.com/download/1/7/1/1718ccc4-6315-4d8e-9543-8e28a4e18c4c/dxwebsetup.exe' 'dxwebsetup.exe' @('/Q')}
     'webview2'{
      Install-MicrosoftRuntime $id 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' 'MicrosoftEdgeWebview2Setup.exe' @('/silent','/install')
@@ -114,6 +170,7 @@ try{
      }
      $script:LibraryTask.finished++
     }
+    default{Install-GSWingetLibrary $id}
    }
    }
   }catch{$script:LibraryTask.errors++;$script:LibraryTask.lastError=$_.Exception.Message;Write-LibraryLog ('ОШИБКА '+$id+': '+$_.Exception.Message)}

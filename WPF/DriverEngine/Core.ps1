@@ -150,43 +150,61 @@ function Get-GSWebView2State {
   $compatible=([Environment]::OSVersion.Version.Major -ge 10 -and [Environment]::OSVersion.Version.Build -ge 17763)
   return [pscustomobject]@{Installed=([bool]$v);Version=$v;Supported=$compatible;Unverified=((-not $v) -and ($registered -or $binary));RegistrationSeen=$registered;BinarySeen=$binary}
 }
-function Get-SystemLibrarySuggestions {
-  $items=New-Object System.Collections.Generic.List[object]
-  foreach($arch in @('x64','x86')){
-    $key=if($arch -eq 'x64'){'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'}else{'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86'}
-    $runtime=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
-    $installed=($null -ne $runtime -and $null -ne $runtime.PSObject.Properties['Installed'] -and [int]$runtime.Installed -eq 1)
-    $id='vcredist-'+$arch
-    $items.Add([pscustomobject]@{instanceId=('LIBRARY|'+$id);name=('Microsoft Visual C++ 2015–2022, '+$arch);kind='Library';libraryId=$(if(-not $installed){$id}else{''});libraryStatus=$(if($installed){'Установлено'}else{'Можно установить дополнительно'});hwid='Microsoft · официальный распространяемый пакет';reason=$(if($installed){'Пакет обнаружен по ключу установленного runtime.'}else{'Не обнаружен. Это необязательная общая рекомендация, а не подтверждённая зависимость конкретного приложения.'});downloadable=(-not $installed);canSelect=(-not $installed);selected=$false})
+function Get-GSInstalledUninstallEntry([string]$Pattern) {
+  foreach($hive in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')){
+    try{if(@(Get-ItemProperty -Path $hive -ErrorAction Stop|Where-Object{$displayName=$_.PSObject.Properties['DisplayName'];$displayName -and [string]$displayName.Value -match $Pattern}).Count){return $true}}catch{}
   }
-  $directXFiles=@((Join-Path $env:WINDIR 'System32\d3dx9_43.dll'),(Join-Path $env:WINDIR 'SysWOW64\d3dx9_43.dll'),(Join-Path $env:WINDIR 'System32\xinput1_3.dll'),(Join-Path $env:WINDIR 'SysWOW64\xinput1_3.dll'))
-  $dxMissing=@($directXFiles|Where-Object{-not (Test-Path -LiteralPath $_)})
-  $items.Add([pscustomobject]@{instanceId='LIBRARY|directx-legacy';name='DirectX Legacy Runtime';kind='Library';libraryId=$(if($dxMissing.Count){'directx-legacy'}else{''});libraryStatus=$(if($dxMissing.Count){'Можно установить дополнительно'}else{'Установлено'});hwid='Microsoft · DirectX End-User Runtime';reason=$(if($dxMissing.Count){'Некоторые legacy-файлы не найдены; требуется только программам, которые явно запрашивают устаревший компонент.'}else{'Проверочные legacy-файлы DirectX обнаружены.'});downloadable=($dxMissing.Count -gt 0);canSelect=($dxMissing.Count -gt 0);selected=$false})
-  $netFx=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v3.5' -ErrorAction SilentlyContinue
-  $netFxInstalled=($null -ne $netFx -and $null -ne $netFx.PSObject.Properties['Install'] -and [int]$netFx.Install -eq 1)
-  $items.Add([pscustomobject]@{instanceId='LIBRARY|netfx3';name='.NET Framework 3.5';kind='Library';libraryId=$(if(-not $netFxInstalled){'netfx3'}else{''});libraryStatus=$(if($netFxInstalled){'Установлено'}else{'Можно установить дополнительно'});hwid='Компонент Windows';reason=$(if($netFxInstalled){'Функция Windows включена.'}else{'Компонент Windows отключён; при включении Windows может потребоваться источник компонентов или Windows Update.'});downloadable=$false;canSelect=(-not $netFxInstalled);selected=$false})
-  $webView=Get-GSWebView2State
-  $available=(-not $webView.Installed -and -not $webView.Unverified -and $webView.Supported)
-  $status=if($webView.Installed){'Установлено'}elseif($webView.Unverified){'Невозможно определить'}elseif($webView.Supported){'Можно установить дополнительно'}else{'Не поддерживается этой системой'}
-  $reason=if($webView.Installed){'Подтверждена версия '+$webView.Version+' (реестр и исполняемый файл). Повторная установка не требуется.'}elseif($webView.Unverified){'Найдены неполные следы WebView2; установка отключена до уточнения состояния.'}elseif($webView.Supported){'WebView2 отсутствует; установка добровольная, требуется интернет.'}else{'Эта Windows не поддерживается.'}
-  $items.Add([pscustomobject]@{instanceId='LIBRARY|webview2';name='Microsoft Edge WebView2 Runtime';kind='Library';libraryId=$(if($available){'webview2'}else{''});libraryStatus=$status;hwid='Microsoft · Evergreen Runtime';reason=$reason;downloadable=$false;canSelect=$available;selected=$false})
-  $desktopRuntimes=@(foreach($arch in @('x64','x86','arm64')){
+  return $false
+}
+function Get-GSDesktopRuntimeVersions {
+  # Returns "8.0.11 x64"-style entries of installed .NET Desktop Runtimes.
+  $result=@(foreach($arch in @('x64','x86','arm64')){
     foreach($root in @('HKLM:\SOFTWARE','HKLM:\SOFTWARE\WOW6432Node')){
       $key="$root\dotnet\Setup\InstalledVersions\$arch\sharedfx\Microsoft.WindowsDesktop.App"
       $registry=Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
       if($registry){foreach($version in $registry.GetValueNames()){if($version -match '^\d+\.\d+\.\d+$'){"$version $arch"}}}
     }
   }) | Select-Object -Unique
-  $desktopRuntimes=@($desktopRuntimes|Where-Object{$_})
-  $items.Add([pscustomobject]@{instanceId='LIBRARY|dotnet-desktop';name='.NET Desktop Runtime';kind='Library';libraryId='';libraryStatus=$(if($desktopRuntimes.Count){'Установлено'}else{'Невозможно определить'});hwid='Microsoft · архитектура x86/x64/ARM64';reason=$(if($desktopRuntimes.Count){'Обнаружены версии: '+($desktopRuntimes -join ', ')}else{'Версии обнаруживаются через установленный runtime registry; универсальный установщик без запроса приложения не выбирается.'});downloadable=$false;canSelect=$false;selected=$false})
-  foreach($runtime in @(@{name='NVIDIA PhysX';pattern='(?i)^NVIDIA PhysX(?! Legacy)';id='physx'},@{name='NVIDIA PhysX Legacy';pattern='(?i)^NVIDIA PhysX Legacy';id='physx-legacy'},@{name='OpenAL';pattern='(?i)^OpenAL';id='openal'})){
-    $found=$false
-    foreach($hive in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')){try{if(@(Get-ItemProperty -Path $hive -ErrorAction Stop|Where-Object{$displayName=$_.PSObject.Properties['DisplayName'];$displayName -and [string]$displayName.Value -match $runtime.pattern}).Count){$found=$true;break}}catch{}}
-    $items.Add([pscustomobject]@{instanceId=('LIBRARY|'+$runtime.id);name=$runtime.name;kind='Library';libraryId='';libraryStatus=$(if($found){'Установлено'}else{'Невозможно определить'});hwid='Проверка записи удаления Windows';reason=$(if($found){'Компонент найден в списке установленных программ.'}else{'Нужность зависит от приложений и игр; безопасный универсальный установщик для этой системы не подтверждён.'});downloadable=$false;canSelect=$false;selected=$false})
+  return @($result|Where-Object{$_})
+}
+function Get-SystemLibrarySuggestions {
+  # Every row that can be selected has a verified installer in Libraries.ps1.
+  # Visual C++ and DirectX stay selectable when present: reinstalling them is the
+  # standard repair for "MSVCP140.dll / d3dx9_43.dll not found" errors.
+  $optional='Можно установить дополнительно'
+  $items=New-Object System.Collections.Generic.List[object]
+  foreach($arch in @('x64','x86')){
+    $key=if($arch -eq 'x64'){'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'}else{'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86'}
+    $runtime=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+    $installed=($null -ne $runtime -and $null -ne $runtime.PSObject.Properties['Installed'] -and [int]$runtime.Installed -eq 1)
+    $id='vcredist-'+$arch
+    $items.Add([pscustomobject]@{instanceId=('LIBRARY|'+$id);name=('Microsoft Visual C++ 2015–2022, '+$arch);kind='Library';libraryId=$id;libraryStatus=$(if($installed){'Установлено'}else{$optional});hwid='Microsoft · официальный распространяемый пакет';reason=$(if($installed){'Пакет установлен. Отметьте, чтобы восстановить его при ошибках MSVCP140.dll / VCRUNTIME140.dll.'}else{'Не обнаружен. Нужен большинству программ и игр.'});downloadable=$true;canSelect=$true;selected=$false})
+  }
+  $directXFiles=@((Join-Path $env:WINDIR 'System32\d3dx9_43.dll'),(Join-Path $env:WINDIR 'SysWOW64\d3dx9_43.dll'),(Join-Path $env:WINDIR 'System32\xinput1_3.dll'),(Join-Path $env:WINDIR 'SysWOW64\xinput1_3.dll'))
+  $dxMissing=@($directXFiles|Where-Object{-not (Test-Path -LiteralPath $_)})
+  $items.Add([pscustomobject]@{instanceId='LIBRARY|directx-legacy';name='DirectX Legacy Runtime';kind='Library';libraryId='directx-legacy';libraryStatus=$(if($dxMissing.Count){$optional}else{'Установлено'});hwid='Microsoft · DirectX End-User Runtime';reason=$(if($dxMissing.Count){'Некоторые legacy-файлы не найдены; нужны старым играм и программам.'}else{'Файлы найдены. Отметьте, чтобы переустановить при ошибках d3dx9 / xinput.'});downloadable=$true;canSelect=$true;selected=$false})
+  $netFx=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v3.5' -ErrorAction SilentlyContinue
+  $netFxInstalled=($null -ne $netFx -and $null -ne $netFx.PSObject.Properties['Install'] -and [int]$netFx.Install -eq 1)
+  $items.Add([pscustomobject]@{instanceId='LIBRARY|netfx3';name='.NET Framework 3.5';kind='Library';libraryId=$(if(-not $netFxInstalled){'netfx3'}else{''});libraryStatus=$(if($netFxInstalled){'Установлено'}else{$optional});hwid='Компонент Windows';reason=$(if($netFxInstalled){'Функция Windows включена.'}else{'Компонент Windows для старых программ; включается средствами Windows.'});downloadable=$false;canSelect=(-not $netFxInstalled);selected=$false})
+  $webView=Get-GSWebView2State
+  $available=(-not $webView.Installed -and -not $webView.Unverified -and $webView.Supported)
+  $status=if($webView.Installed){'Установлено'}elseif($webView.Unverified){'Невозможно определить'}elseif($webView.Supported){$optional}else{'Не поддерживается этой системой'}
+  $reason=if($webView.Installed){'Подтверждена версия '+$webView.Version+' (реестр и исполняемый файл). Повторная установка не требуется.'}elseif($webView.Unverified){'Найдены неполные следы WebView2; установка отключена до уточнения состояния.'}elseif($webView.Supported){'WebView2 отсутствует; установка добровольная, требуется интернет.'}else{'Эта Windows не поддерживается.'}
+  $items.Add([pscustomobject]@{instanceId='LIBRARY|webview2';name='Microsoft Edge WebView2 Runtime';kind='Library';libraryId=$(if($available){'webview2'}else{''});libraryStatus=$status;hwid='Microsoft · Evergreen Runtime';reason=$reason;downloadable=$false;canSelect=$available;selected=$false})
+  $desktopRuntimes=@(Get-GSDesktopRuntimeVersions)
+  $nativeArch=if([Environment]::Is64BitOperatingSystem){'x64'}else{'x86'}
+  foreach($major in @(@{id='dotnet-desktop';version='8';label='.NET Desktop Runtime 8 (LTS)'},@{id='dotnet-desktop-10';version='10';label='.NET Desktop Runtime 10 (LTS)'})){
+    $found=@($desktopRuntimes|Where-Object{$_ -match ('^'+$major.version+'\.\d+\.\d+ '+$nativeArch+'$')})
+    $isInstalled=($found.Count -gt 0)
+    $items.Add([pscustomobject]@{instanceId=('LIBRARY|'+$major.id);name=$major.label;kind='Library';libraryId=$(if($isInstalled){''}else{$major.id});libraryStatus=$(if($isInstalled){'Установлено'}else{$optional});hwid=('Microsoft · '+$nativeArch);reason=$(if($isInstalled){'Обнаружены версии: '+($found -join ', ')}else{'Не обнаружен. Нужен программам на .NET '+$major.version+' (WPF / WinForms).'});downloadable=$true;canSelect=(-not $isInstalled);selected=$false})
+  }
+  foreach($runtime in @(@{name='NVIDIA PhysX';pattern='(?i)^NVIDIA PhysX(?! Legacy)';id='physx';hint='Нужен играм с физикой NVIDIA PhysX.'},@{name='NVIDIA PhysX Legacy';pattern='(?i)^NVIDIA PhysX Legacy';id='physx-legacy';hint='Нужен старым играм (примерно до 2010 года) с PhysX.'},@{name='OpenAL';pattern='(?i)^OpenAL';id='openal';hint='Звуковая библиотека для старых игр.'})){
+    $found=Get-GSInstalledUninstallEntry $runtime.pattern
+    $items.Add([pscustomobject]@{instanceId=('LIBRARY|'+$runtime.id);name=$runtime.name;kind='Library';libraryId=$(if($found){''}else{$runtime.id});libraryStatus=$(if($found){'Установлено'}else{$optional});hwid='Официальный пакет WinGet';reason=$(if($found){'Компонент найден в списке установленных программ.'}else{$runtime.hint+' Устанавливается добровольно.'});downloadable=$true;canSelect=(-not $found);selected=$false})
   }
   $appRuntimeCount=0
-  if(Get-Command Get-AppxPackage -ErrorAction SilentlyContinue){try{$appRuntimeCount=@(Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.*' -ErrorAction Stop).Count}catch{}}
-  $items.Add([pscustomobject]@{instanceId='LIBRARY|windows-app-runtime';name='Microsoft Windows App Runtime';kind='Library';libraryId='';libraryStatus=$(if($appRuntimeCount){'Установлено'}else{'Невозможно определить'});hwid='Microsoft · AppX framework packages';reason=$(if($appRuntimeCount){'Найдены framework packages: '+$appRuntimeCount}else{'Установка выполняется только как объявленная зависимость конкретного приложения.'});downloadable=$false;canSelect=$false;selected=$false})
+  if(Get-Command Get-AppxPackage -ErrorAction SilentlyContinue){try{$appRuntimeCount=@(Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.1.8*' -ErrorAction Stop).Count}catch{}}
+  $items.Add([pscustomobject]@{instanceId='LIBRARY|windows-app-runtime';name='Microsoft Windows App Runtime 1.8';kind='Library';libraryId=$(if($appRuntimeCount){''}else{'windows-app-runtime'});libraryStatus=$(if($appRuntimeCount){'Установлено'}else{$optional});hwid='Microsoft · AppX framework packages';reason=$(if($appRuntimeCount){'Найдены framework packages: '+$appRuntimeCount}else{'Нужен современным приложениям на WinUI 3. Устанавливается добровольно.'});downloadable=$false;canSelect=($appRuntimeCount -eq 0);selected=$false})
   return @($items.ToArray())
 }
 function Get-NormalIds($dev) {

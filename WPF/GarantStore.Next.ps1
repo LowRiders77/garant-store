@@ -71,6 +71,7 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <StackPanel Orientation="Horizontal" Margin="5,2,0,20"><Border Width="36" Height="36" Background="#151A16" BorderBrush="#343C36" BorderThickness="1" CornerRadius="9" Margin="0,0,11,0"><Image x:Name="BrandMarkSmall" Width="32" Height="32" Stretch="Uniform"/></Border><StackPanel VerticalAlignment="Center"><TextBlock Text="Garant Store" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="Программы для Windows" FontSize="11" Foreground="#89938B" Margin="0,3,0,0"/></StackPanel></StackPanel>
     <TextBlock Text="Приложения" Foreground="#89938B" FontSize="11" Margin="12,0,0,9"/>
     <Button x:Name="GoCatalog" Tag="M2,2 H8 V8 H2 Z M12,2 H18 V8 H12 Z M2,12 H8 V18 H2 Z M12,12 H18 V18 H12 Z" Content="Каталог" Style="{StaticResource NavButton}" Margin="0,0,0,4" Background="#222B24" BorderBrush="#35463A" Foreground="#C1E7C9"/>
+    <Button x:Name="GoBundles" AutomationProperties.AutomationId="OpenBundles" Tag="M3,6 H17 V17 H3 Z M7,6 V3 H13 V6 M3,10 H17" Content="Наборы" Style="{StaticResource NavButton}"/>
     <Button x:Name="GoResults" Tag="M14,8 A6,6 0 1 1 2,8 A6,6 0 1 1 14,8 M12,12 L18,18" Content="Результаты поиска" Style="{StaticResource NavButton}"/>
     <Button x:Name="GoLog" Tag="M2,2 H18 V18 H2 Z M5,6 H15 M5,10 H15 M5,14 H11" Content="Журнал операций" Style="{StaticResource NavButton}" Margin="0,0,0,12"/>
     <TextBlock Text="Обслуживание" Foreground="#89938B" FontSize="11" Margin="12,0,0,9"/>
@@ -110,6 +111,11 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <ListBox x:Name="Results" AutomationProperties.AutomationId="SearchResults" Grid.Row="1" Background="Transparent" BorderThickness="0" ItemTemplate="{StaticResource Application}" ItemsPanel="{StaticResource Wrap}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
     <DockPanel Grid.Row="2" Margin="0,14,0,0"><Button x:Name="Install" AutomationProperties.AutomationId="InstallSelected" Content="Установить выбранное" DockPanel.Dock="Right" Style="{StaticResource AccentButton}" IsEnabled="False"/><TextBlock x:Name="Selection" AutomationProperties.AutomationId="SelectionSummary" Text="Выберите приложение" VerticalAlignment="Center" Foreground="#ADB7AF" FontSize="12"/></DockPanel>
    </Grid>
+   <Grid x:Name="BundlesView" Visibility="Collapsed"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <DockPanel Grid.Row="0" Margin="0,0,0,14"><Button x:Name="BundleBack" AutomationProperties.AutomationId="BundleBack" DockPanel.Dock="Left" Content="← Наборы" Style="{StaticResource ButtonStyle}" Margin="0,0,14,0" VerticalAlignment="Center" Visibility="Collapsed"/><StackPanel><TextBlock x:Name="BundleTitle" Text="Наборы программ" FontSize="18" FontWeight="Medium"/><TextBlock x:Name="BundleSubtitle" Text="" Foreground="#89938B" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/></StackPanel></DockPanel>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel><WrapPanel x:Name="BundleCards" AutomationProperties.AutomationId="BundleCards"/><StackPanel x:Name="BundleItems" AutomationProperties.AutomationId="BundleItems" Visibility="Collapsed" Margin="4,0,0,0"/></StackPanel></ScrollViewer>
+    <DockPanel Grid.Row="2" Margin="0,14,0,0"><Button x:Name="BundleInstall" AutomationProperties.AutomationId="BundleInstall" Content="Установить выбранное" DockPanel.Dock="Right" Style="{StaticResource AccentButton}" Visibility="Collapsed" IsEnabled="False"/><Button x:Name="BundleToggle" Content="Отметить всё / снять" DockPanel.Dock="Right" Style="{StaticResource ButtonStyle}" Margin="0,0,10,0" Visibility="Collapsed"/><TextBlock x:Name="BundleSummary" AutomationProperties.AutomationId="BundleSummary" Text="" VerticalAlignment="Center" Foreground="#ADB7AF" FontSize="12"/></DockPanel>
+   </Grid>
    <Grid x:Name="LogView" Visibility="Collapsed"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <TextBlock Text="Журнал операций" FontSize="18" FontWeight="Medium" Margin="0,0,0,14"/>
     <TextBox x:Name="Log" AutomationProperties.AutomationId="OperationLog" Grid.Row="1" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto"/>
@@ -136,7 +142,7 @@ $script:uiDispatcher.add_UnhandledException({param($sender,$e)
  $e.Handled=$true
  try{$Status.Text='Ошибка интерфейса';$Detail.Text='Подробности записаны в диагностический журнал.'}catch{}
 })
-foreach($name in @('GoCatalog','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress')) {
+foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress')) {
  Set-Variable -Scope Script -Name $name -Value $win.FindName($name)
 }
 $iconPath=Join-Path $root 'Assets\GarantStoreMark.ico'
@@ -241,8 +247,9 @@ function Page([string]$tab){
  $CatalogView.Visibility=if($tab -eq 'catalog'){'Visible'}else{'Collapsed'}
  $ResultsView.Visibility=if($tab -eq 'results'){'Visible'}else{'Collapsed'}
  $LogView.Visibility=if($tab -eq 'log'){'Visible'}else{'Collapsed'}
- $Heading.Text=switch($tab){'results'{'Результаты поиска'}'log'{'Журнал операций'}default{'Приложения'}}
- foreach($nav in @(@{Button=$GoCatalog;Key='catalog'},@{Button=$GoResults;Key='results'},@{Button=$GoLog;Key='log'})){
+ $BundlesView.Visibility=if($tab -eq 'bundles'){'Visible'}else{'Collapsed'}
+ $Heading.Text=switch($tab){'results'{'Результаты поиска'}'log'{'Журнал операций'}'bundles'{'Наборы'}default{'Приложения'}}
+ foreach($nav in @(@{Button=$GoCatalog;Key='catalog'},@{Button=$GoBundles;Key='bundles'},@{Button=$GoResults;Key='results'},@{Button=$GoLog;Key='log'})){
   if($nav.Key -eq $tab){$nav.Button.Background='#222B24';$nav.Button.BorderBrush='#35463A';$nav.Button.Foreground='#C1E7C9'}
   else{$nav.Button.Background='Transparent';$nav.Button.BorderBrush='Transparent';$nav.Button.Foreground='#DCE4DD'}
  }
@@ -304,8 +311,8 @@ function Run-Core([hashtable]$req){
  $opQuery=if($req.ContainsKey('Query')){[string]$req.Query}else{''}
  $opSource=if($req.ContainsKey('Source')){[string]$req.Source}else{''}
  $Log.Clear()
- $script:op=[pscustomobject]@{Id=$req.OperationId;Process=$process;Stopped=$false;LogOffset=[long]0;LogDecoder=(New-Object Text.UTF8Encoding($false)).GetDecoder();Action=$req.Action;Out=$outputFile;Result=$resultFile;Preview=$previewFile;Progress=$progressFile;SeenPreview=$false;Query=$opQuery;Source=$opSource;AgreementConsent=[bool]$req.AgreementConsent;Request=@{}+$req}
- $Search.IsEnabled=$false;$Install.IsEnabled=$false;$Stop.IsEnabled=$true
+ $script:op=[pscustomobject]@{Id=$req.OperationId;Process=$process;Stopped=$false;BundlePosition='';BundleItem='';LogOffset=[long]0;LogDecoder=(New-Object Text.UTF8Encoding($false)).GetDecoder();Action=$req.Action;Out=$outputFile;Result=$resultFile;Preview=$previewFile;Progress=$progressFile;SeenPreview=$false;Query=$opQuery;Source=$opSource;AgreementConsent=[bool]$req.AgreementConsent;Request=@{}+$req}
+ $Search.IsEnabled=$false;$Install.IsEnabled=$false;$BundleInstall.IsEnabled=$false;$Stop.IsEnabled=$true
  $Status.Text='Выполняется: '+$req.Action;$Detail.Text='Подготовка...';$Progress.IsIndeterminate=$true
  $tick.Start()
 }
@@ -362,6 +369,174 @@ function Load-Results($list){
  }
  $ResultCount.Text=([string]$Results.Items.Count)+' найдено'
 }
+# --- Bundles: curated sets of programs installed one after another --------------
+$script:bundles=@()
+$script:currentBundle=$null
+$script:bundleRows=@()
+$bundleFile=Join-Path $root 'Bundles.json'
+if(Test-Path -LiteralPath $bundleFile){
+ try{$script:bundles=@((Get-Content -LiteralPath $bundleFile -Raw -Encoding UTF8|ConvertFrom-Json).Bundles)}
+ catch{Write-GSUiFailure -Component 'Bundles.Load' -Exception $_.Exception}
+}
+function New-GSBundleText([string]$Text,[double]$Size,[string]$Color,[string]$Weight='Normal'){
+ $t=New-Object Windows.Controls.TextBlock
+ $t.Text=$Text;$t.FontSize=$Size;$t.Foreground=$Color;$t.FontWeight=$Weight;$t.TextWrapping='Wrap'
+ return $t
+}
+function Show-GSBundleCards {
+ $script:currentBundle=$null;$script:bundleRows=@()
+ $BundleCards.Visibility='Visible';$BundleItems.Visibility='Collapsed'
+ $BundleBack.Visibility='Collapsed';$BundleInstall.Visibility='Collapsed';$BundleToggle.Visibility='Collapsed'
+ $BundleTitle.Text='Наборы программ'
+ $BundleSubtitle.Text='Выберите набор: программы установятся по очереди, уже установленные будут пропущены'
+ $BundleSummary.Text=if($script:bundles.Count){[string]$script:bundles.Count+' наборов'}else{'Файл наборов не найден'}
+}
+function Initialize-GSBundleCards {
+ $BundleCards.Children.Clear()
+ foreach($bundle in $script:bundles){
+  $card=New-Object Windows.Controls.Button
+  $card.Style=$win.FindResource('ButtonStyle')
+  $card.Width=264;$card.Height=118;$card.Margin=New-Object Windows.Thickness(0,0,12,12)
+  $card.HorizontalContentAlignment='Left';$card.VerticalContentAlignment='Top';$card.Padding=New-Object Windows.Thickness(16,14,16,14)
+  $card.Tag=$bundle
+  [Windows.Automation.AutomationProperties]::SetAutomationId($card,'Bundle-'+[string]$bundle.Id)
+  $panel=New-Object Windows.Controls.StackPanel
+  [void]$panel.Children.Add((New-GSBundleText ([string]$bundle.Title) 16 '#EEF2EE' 'SemiBold'))
+  $description=New-GSBundleText ([string]$bundle.Description) 11 '#89938B';$description.Margin=New-Object Windows.Thickness(0,6,0,0);$description.MaxHeight=46
+  [void]$panel.Children.Add($description)
+  $count=New-GSBundleText ([string]@($bundle.Items).Count+' программ') 11 '#70E2AA';$count.Margin=New-Object Windows.Thickness(0,8,0,0)
+  [void]$panel.Children.Add($count)
+  $card.Content=$panel
+  $card.Add_Click({param($sender,$e)Open-GSBundle $sender.Tag})
+  [void]$BundleCards.Children.Add($card)
+ }
+}
+function Open-GSBundle($Bundle,[switch]$SkipStateCheck){
+ $script:currentBundle=$Bundle
+ $BundleCards.Visibility='Collapsed';$BundleItems.Visibility='Visible'
+ $BundleBack.Visibility='Visible';$BundleInstall.Visibility='Visible';$BundleToggle.Visibility='Visible'
+ $BundleTitle.Text=[string]$Bundle.Title;$BundleSubtitle.Text=[string]$Bundle.Description
+ $BundleItems.Children.Clear()
+ $rows=New-Object System.Collections.ArrayList
+ foreach($item in @($Bundle.Items)){
+  $box=New-Object Windows.Controls.CheckBox
+  $box.IsChecked=[bool]$item.Default;$box.Margin=New-Object Windows.Thickness(0,0,0,10);$box.Foreground='#EEF2EE';$box.VerticalContentAlignment='Center'
+  [Windows.Automation.AutomationProperties]::SetAutomationId($box,'BundleItem-'+[string]$item.Id)
+  $panel=New-Object Windows.Controls.StackPanel;$panel.Margin=New-Object Windows.Thickness(8,0,0,0)
+  [void]$panel.Children.Add((New-GSBundleText ([string]$item.Name) 14 '#EEF2EE' 'Medium'))
+  $state=New-GSBundleText ($(if($SkipStateCheck){[string]$item.Id}else{'Проверяем статус...'})) 11 '#89938B'
+  [void]$panel.Children.Add($state)
+  $box.Content=$panel
+  $box.Add_Click({Update-GSBundleSummary})
+  [void]$BundleItems.Children.Add($box)
+  [void]$rows.Add([pscustomobject]@{Item=$item;CheckBox=$box;State=$state})
+ }
+ $script:bundleRows=@($rows.ToArray())
+ Update-GSBundleSummary
+ Page 'bundles'
+ if(-not $SkipStateCheck){
+  if($null -eq $script:op){Run-Core @{Action='bundlestate';Items=@(Get-GSBundleRequestItems -All)}}
+  else{foreach($row in $script:bundleRows){$row.State.Text='Статус проверится после текущей операции'}}
+ }
+}
+function Get-GSBundleRequestItems([switch]$All,[string[]]$OnlyIds=@()){
+ $selected=@($script:bundleRows|Where-Object{$All -or ([bool]$_.CheckBox.IsChecked -and $_.CheckBox.IsEnabled)})
+ if($OnlyIds.Count){$selected=@($script:bundleRows|Where-Object{$OnlyIds -contains [string]$_.Item.Id})}
+ return @($selected|ForEach-Object{@{Name=[string]$_.Item.Name;Id=[string]$_.Item.Id;Source=[string]$_.Item.Source}})
+}
+function Update-GSBundleSummary {
+ $checked=@($script:bundleRows|Where-Object{[bool]$_.CheckBox.IsChecked -and $_.CheckBox.IsEnabled}).Count
+ $BundleSummary.Text='Выбрано: '+$checked+' из '+$script:bundleRows.Count
+ $BundleInstall.IsEnabled=($checked -gt 0 -and $null -eq $script:op)
+ $BundleInstall.Content=if($checked -gt 0){'Установить выбранное ('+$checked+')'}else{'Установить выбранное'}
+}
+function Set-GSBundleRowState($Row,[string]$Text,[string]$Color,[bool]$Selectable,[object]$Checked=$null){
+ $Row.State.Text=$Text;$Row.State.Foreground=$Color
+ $Row.CheckBox.IsEnabled=$Selectable
+ if(-not $Selectable){$Row.CheckBox.IsChecked=$false}elseif($null -ne $Checked){$Row.CheckBox.IsChecked=[bool]$Checked}
+}
+function Find-GSBundleRow([string]$Id){
+ return @($script:bundleRows|Where-Object{[string]::Equals([string]$_.Item.Id,$Id,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
+}
+function Update-GSBundleStates($States){
+ foreach($state in @($States)){
+  $row=Find-GSBundleRow ([string]$state.Id);if($null -eq $row){continue}
+  switch([string]$state.Status){
+   'Installed'{Set-GSBundleRowState $row ('Установлено'+$(if($state.InstalledVersion){' · '+[string]$state.InstalledVersion}else{''})) '#70E2AA' $false}
+   'StoreUpdateUnknown'{Set-GSBundleRowState $row 'Установлено' '#70E2AA' $false}
+   'UpdateAvailable'{Set-GSBundleRowState $row ('Доступно обновление · '+[string]$state.AvailableVersion) '#E6C36A' $true $true}
+   'NotInstalled'{Set-GSBundleRowState $row 'Не установлено' '#ADB7AF' $true}
+   default{Set-GSBundleRowState $row 'Статус не определён: будет проверен при установке' '#89938B' $true}
+  }
+ }
+ Update-GSBundleSummary
+}
+function Show-GSBundleOutcome($Data){
+ if($null -eq $Data){return}
+ foreach($outcome in @($Data.Items)){
+  $row=Find-GSBundleRow ([string]$outcome.Id);if($null -eq $row){continue}
+  switch([string]$outcome.Outcome){
+   'InstalledVerified'{Set-GSBundleRowState $row 'Установлено и проверено' '#70E2AA' $false}
+   'UpdateVerified'{Set-GSBundleRowState $row 'Обновлено и проверено' '#70E2AA' $false}
+   'AlreadyCurrent'{Set-GSBundleRowState $row 'Уже было установлено' '#70E2AA' $false}
+   'StoreUpdateUnknown'{Set-GSBundleRowState $row 'Уже было установлено' '#70E2AA' $false}
+   default{
+    $reason=if([string]$outcome.ErrorCode -eq 'StoreServiceConsentRequired'){'нужно разрешить службы Microsoft Store'}else{[string]$outcome.Message}
+    Set-GSBundleRowState $row ('Не установлено: '+$reason) '#E58A7A' $true $true
+   }
+  }
+ }
+ Update-GSBundleSummary
+ $Status.Text=if([int]$Data.Failed -eq 0){'Набор установлен'}else{'Набор установлен частично'}
+ $Detail.Text='Установлено: '+[int]$Data.Installed+' · уже было: '+[int]$Data.AlreadyPresent+' · ошибок: '+[int]$Data.Failed
+}
+function Format-GSBundleProgress($Progress){
+ # Core reports "Bundle i/N" with the program name; inner pipeline stages keep
+ # the position visible instead of replacing it.
+ if([string]$Progress.Stage -match '^Bundle (\d+)/(\d+)$'){$script:op.BundlePosition='Набор: программа '+$Matches[1]+' из '+$Matches[2];$script:op.BundleItem=[string]$Progress.Detail}
+ if($script:op.BundlePosition){$Status.Text=$script:op.BundlePosition;$Detail.Text=$script:op.BundleItem}
+}
+function Complete-GSBundleOperation($Operation,$Result){
+ if($Operation.Action -eq 'bundlestate'){
+  $rows=Get-GSUiObjectValue $Result 'Results' $null
+  if($null -ne $rows){Update-GSBundleStates $rows;$Status.Text='Готово';$Detail.Text='Статус программ набора проверен'}
+  else{foreach($row in $script:bundleRows){if($row.State.Text -eq 'Проверяем статус...'){$row.State.Text='Статус не определён: будет проверен при установке'}}}
+  return
+ }
+ if($Operation.Action -ne 'bundle'){return}
+ $data=Get-GSUiObjectValue $Result 'Data' $null
+ Show-GSBundleOutcome $data
+ $consentIds=@(@(Get-GSUiObjectValue $data 'NeedsServiceConsent' @())|Where-Object{$_})
+ if($consentIds.Count -and -not [bool]$Operation.Request.AllowServiceChanges){
+  $retryItems=@(Get-GSBundleRequestItems -OnlyIds $consentIds)
+  $prompt='Для установки приложений из Microsoft Store ('+$retryItems.Count+') нужен временный запуск системных служб.'+"`n`n"+'Windows запросит права администратора. Исходные настройки служб будут восстановлены автоматически. Разрешить и повторить установку только этих приложений?'
+  $retry={
+   try{
+    $choice=[Windows.MessageBox]::Show($win,$prompt,'Требуются службы Microsoft Store',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Warning)
+    if($choice -eq [Windows.MessageBoxResult]::Yes){Run-Core @{Action='bundle';Items=$retryItems;AgreementConsent=$true;AllowServiceChanges=$true}}
+   }catch{Write-GSUiFailure -Component 'Bundle.ServiceConsentRetry' -Exception $_.Exception}
+  }.GetNewClosure()
+  [void]$win.Dispatcher.BeginInvoke([Action]$retry,[Windows.Threading.DispatcherPriority]::Background)
+ }
+}
+$BundleBack.Add_Click({Show-GSBundleCards})
+$BundleToggle.Add_Click({
+ $enabled=@($script:bundleRows|Where-Object{$_.CheckBox.IsEnabled})
+ $allChecked=(@($enabled|Where-Object{-not [bool]$_.CheckBox.IsChecked}).Count -eq 0)
+ foreach($row in $enabled){$row.CheckBox.IsChecked=-not $allChecked}
+ Update-GSBundleSummary
+})
+$BundleInstall.Add_Click({
+ $items=@(Get-GSBundleRequestItems)
+ if($items.Count -eq 0 -or $null -ne $script:op){return}
+ $names=($items|ForEach-Object{$_.Name}) -join ', '
+ $message='Установить '+$items.Count+' программ из набора «'+[string]$script:currentBundle.Title+'»?'+"`n`n"+$names+"`n`n"+'Программы ставятся по очереди. Windows может запросить права администратора для некоторых из них. Нажимая «Да», вы принимаете соглашения пакетов и источников.'
+ if([Windows.MessageBox]::Show($win,$message,'Garant Store',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question) -ne [Windows.MessageBoxResult]::Yes){return}
+ try{Run-Core @{Action='bundle';Items=$items;AgreementConsent=$true}}catch{$Status.Text=$_.Exception.Message}
+})
+$GoBundles.Add_Click({if($null -eq $script:currentBundle){Show-GSBundleCards};Page 'bundles'})
+Initialize-GSBundleCards
+Show-GSBundleCards
 $tick=New-Object Windows.Threading.DispatcherTimer
 $tick.Interval=[TimeSpan]::FromMilliseconds(450)
 $tick.Add_Tick({
@@ -376,6 +551,7 @@ $tick.Add_Tick({
    if($null -ne $p.Stage){$Status.Text=[string]$p.Stage}
    if($null -ne $p.Detail){$Detail.Text=[string]$p.Detail}
    if($null -ne $p.Percent -and [double]$p.Percent -ge 0 -and [double]$p.Percent -le 100){$Progress.IsIndeterminate=$false;$Progress.Value=[double]$p.Percent}
+   if($o.Action -eq 'bundle'){Format-GSBundleProgress $p}
   }
   if($o.Action -eq 'search' -and -not $o.SeenPreview -and [IO.File]::Exists($o.Preview)){
    $v=Get-Content $o.Preview -Raw | ConvertFrom-Json
@@ -406,14 +582,16 @@ $tick.Add_Tick({
     'RepairPartial'{$resultMessage}
     default{$resultMessage}
    }
+   if($o.Action -in @('bundlestate','bundle')){Complete-GSBundleOperation $o $v}
   }elseif([bool]$o.Stopped){
    $Status.Text='Остановлено'
-   $Detail.Text=if($o.Action -eq 'install'){'Операция прервана. Если установщик уже вносил изменения, проверьте приложение или повторите установку.'}else{'Операция прервана пользователем.'}
+   $Detail.Text=if($o.Action -in @('install','bundle')){'Операция прервана. Если установщик уже вносил изменения, проверьте приложение или повторите установку.'}else{'Операция прервана пользователем.'}
   }else{$Status.Text='Операция завершилась без результата';$Detail.Text='Откройте журнал'}
  }catch{$Status.Text='Ошибка обработки результата';$Detail.Text=$_.Exception.Message}
  $o.Process.Dispose();$script:op=$null;$Progress.IsIndeterminate=$false
  $Search.IsEnabled=$true;$Stop.IsEnabled=$false
  $Install.IsEnabled=($null -ne $Results.SelectedItem)
+ Update-GSBundleSummary
  Remove-Temp
  if($agreementRetry){
   $query=$o.Query;$source=$o.Source
@@ -501,7 +679,7 @@ $Repair.Add_Click({
 })
 $Stop.Add_Click({
  $o=$script:op;if($null -eq $o){return}
- if($o.Action -eq 'install'){
+ if($o.Action -in @('install','bundle')){
   $answer=[Windows.MessageBox]::Show($win,'Остановка во время установки может оставить приложение установленным не полностью. Остановить операцию?','Garant Store',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Warning)
   if($answer -ne [Windows.MessageBoxResult]::Yes){return}
  }
@@ -535,6 +713,22 @@ if($env:GS_WPF_SMOKE -eq '1'){
     }
    }else{$win.Width=1600;$win.Height=920;$win.UpdateLayout()}
   }catch{$result='SMOKE_FAILED_'+$_.Exception.Message}
+  if($result -eq 'CLOSED'){
+   try{
+    if($BundleCards.Children.Count -lt 4){throw ('BUNDLES_MISSING_'+$BundleCards.Children.Count)}
+    Open-GSBundle $script:bundles[0] -SkipStateCheck
+    if($BundleItems.Children.Count -lt 3){throw 'BUNDLE_ITEMS_MISSING'}
+    if(-not $BundleInstall.IsEnabled){throw 'BUNDLE_INSTALL_DISABLED_WITH_DEFAULTS'}
+    $imageFolder=[string]$env:GS_WPF_SCREENSHOT_DIR
+    if($imageFolder){
+     $win.UpdateLayout()
+     $bmp=New-Object Windows.Media.Imaging.RenderTargetBitmap([int][Math]::Ceiling($win.ActualWidth),[int][Math]::Ceiling($win.ActualHeight),96,96,[Windows.Media.PixelFormats]::Pbgra32)
+     $bmp.Render($win);$encoder=New-Object Windows.Media.Imaging.PngBitmapEncoder;$encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
+     $stream=[IO.File]::Create((Join-Path $imageFolder 'garant-next-bundle.png'));try{$encoder.Save($stream)}finally{$stream.Dispose()}
+    }
+    Show-GSBundleCards;Page 'catalog'
+   }catch{$result='BUNDLES_FAILED_'+$_.Exception.Message}
+  }
   if($result -eq 'CLOSED'){try{Show-About}catch{$result='ABOUT_FAILED_'+$_.Exception.Message}}
   if($env:GS_WPF_SMOKE_MARKER){[IO.File]::WriteAllText($env:GS_WPF_SMOKE_MARKER,$result,[Text.UTF8Encoding]::new($false))}
   $win.Close()

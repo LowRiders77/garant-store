@@ -40,6 +40,7 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 [Files]
 Source: "..\GarantStore*.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\AboutWindow.xaml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\Bundles.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\DriverWindow.xaml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\GarantStore.Drivers.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\GarantStore.Launcher.vbs"; DestDir: "{app}"; Flags: ignoreversion

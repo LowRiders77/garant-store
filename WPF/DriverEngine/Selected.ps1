@@ -44,7 +44,7 @@ try{
  foreach($item in $selection){
   if($item -match '^device:(.+)$'){$devices.Add($Matches[1])}
   elseif($item -match '^update:([0-9A-Fa-f-]{36}\|\d+)$'){$updates.Add($Matches[1])}
-  elseif($item -match '^library:(vcredist-x64|vcredist-x86|directx-legacy|netfx3|webview2)$'){$libraries.Add($Matches[1])}
+  elseif($item -match '^library:(vcredist-x64|vcredist-x86|directx-legacy|netfx3|webview2|dotnet-desktop|dotnet-desktop-10|windows-app-runtime|physx|physx-legacy|openal)$'){$libraries.Add($Matches[1])}
  }
  $updateRows=@($originalInventory|Where-Object{[string](Get-GSSelectedChildProperty $_ 'kind' '') -eq 'Update'})
  if($devices.Count -and $updateRows.Count){Write-SelectedLog 'Для отмеченных устройств сначала запускается поиск и установка из DRP. Предложения Windows Update остаются отдельным источником.'}
