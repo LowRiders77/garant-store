@@ -1,0 +1,220 @@
+name: Garant Store Next — Windows setup preview
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'WPF/**'
+      - 'CI/**'
+      - '.github/workflows/wpf-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garant-store-next-preview-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-gate:
+    name: PowerShell 5.1, WPF launch, Inno Setup install and uninstall
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require registered WinGet and healthy sources
+        shell: pwsh
+        run: ./CI/Ensure-WinGet.ps1
+
+      - name: Run complete Windows regression gate and build exact setup
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "CI\Invoke-WindowsCI.ps1"
+
+      - name: Upload setup preview only after successful gate
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-Setup-test-input-${{ github.run_number }}
+          path: CI-output/GarantStore-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload screenshots and gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-Next-Windows-evidence-${{ github.run_number }}
+          path: CI-output/
+          if-no-files-found: warn
+          retention-days: 14
+
+  ui-integration:
+    name: WPF UI Automation - ${{ matrix.scenario }}
+    needs: build-and-gate
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - search-winget
+          - search-msstore
+          - search-aggregate
+          - consent-accept
+          - consent-decline
+          - consent-cancel
+          - network-error
+          - lifecycle
+          - webview2-installed
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download exact setup built by the gate
+        uses: actions/download-artifact@v4
+        with:
+          name: GarantStore-Setup-test-input-${{ github.run_number }}
+          path: CI-output
+
+      - name: Require registered WinGet
+        shell: pwsh
+        run: ./CI/Ensure-WinGet.ps1
+
+      - name: Install tested build
+        shell: pwsh
+        run: |
+          $setup = Resolve-Path 'CI-output/GarantStore-Setup.exe'
+          Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
+          if (-not (Test-Path (Join-Path $env:ProgramFiles 'Garant Store Next\GarantStore.Launcher.vbs'))) { throw 'Tested setup did not install the app' }
+
+      - name: Run real WinGet and WPF UI Automation scenario
+        shell: pwsh
+        run: ./WPF/CI/Test-GarantStoreUI.ps1 -Scenario '${{ matrix.scenario }}'
+
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-UI-evidence-${{ matrix.scenario }}-${{ github.run_number }}
+          path: WPF/CI-output/ui/
+          if-no-files-found: warn
+          retention-days: 14
+
+  webview2-integration:
+    name: REAL WebView2 installation through WPF on clean Windows
+    needs: build-and-gate
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download identical Windows-gated setup
+        uses: actions/download-artifact@v4
+        with:
+          name: GarantStore-Setup-test-input-${{ github.run_number }}
+          path: CI-output
+      - name: Install tested build on disposable Windows host
+        shell: pwsh
+        run: |
+          $setup = Resolve-Path 'CI-output/GarantStore-Setup.exe'
+          $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Setup exit code: $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $env:ProgramFiles 'Garant Store Next\GarantStore.Launcher.vbs'))) { throw 'Installed WPF application missing' }
+      - name: Verify REAL missing-runtime to installed-runtime WPF flow
+        shell: powershell
+        run: ./WPF/CI/Test-GarantStoreUI.ps1 -Scenario webview2-install
+      - name: Upload real WebView2 UI and installation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-WebView2-evidence-${{ github.run_number }}
+          path: WPF/CI-output/ui/
+          if-no-files-found: warn
+          retention-days: 14
+
+  integration-report:
+    name: Consolidated test report and final Windows candidate
+    if: always()
+    needs:
+      - build-and-gate
+      - ui-integration
+      - webview2-integration
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download build gate evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: GarantStore-Next-Windows-evidence-${{ github.run_number }}
+          path: WPF/CI-output/integration/build
+
+      - name: Download UI automation evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: GarantStore-UI-evidence-*-${{ github.run_number }}
+          path: WPF/CI-output/integration/ui
+          merge-multiple: true
+
+      - name: Download WebView2 real-install evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: GarantStore-WebView2-evidence-${{ github.run_number }}
+          path: WPF/CI-output/integration/webview2
+
+      - name: Write unified pass, fail, and unavailable report
+        if: always()
+        shell: pwsh
+        run: ./WPF/CI/Write-IntegrationReport.ps1 -EvidenceRoot ./WPF/CI-output/integration -BuildGateResult '${{ needs.build-and-gate.result }}' -UiGateResult '${{ needs.ui-integration.result }}' -WebView2GateResult '${{ needs.webview2-integration.result }}'
+
+      - name: Download exact setup used by UI tests
+        if: success()
+        uses: actions/download-artifact@v4
+        with:
+          name: GarantStore-Setup-test-input-${{ github.run_number }}
+          path: WPF/candidate
+
+      - name: Record final candidate checksum
+        if: success()
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path 'WPF/candidate/GarantStore-Setup.exe'
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $commit = '${{ github.sha }}'
+          $buildId = $env:GITHUB_RUN_ID
+          "Status: RELEASE CANDIDATE`nCommit: $commit`nBuild ID: $buildId`nSHA-256 (setup.exe): $hash`nSee integration-report.md for passed and unavailable checks." | Set-Content -LiteralPath 'WPF/candidate/BUILD-IDENTITY.txt' -Encoding UTF8
+          Copy-Item -LiteralPath 'WPF/CI-output/integration/integration-report.md' -Destination 'WPF/candidate/'
+          Write-Host "Candidate commit=$commit build=$buildId sha256=$hash"
+
+      - name: Upload one final candidate for real Windows verification
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-Windows-candidate-${{ github.run_number }}
+          path: WPF/candidate/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload consolidated report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GarantStore-Integration-Report-${{ github.run_number }}
+          path: WPF/CI-output/integration/
+          if-no-files-found: warn
+          retention-days: 14

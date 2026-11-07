@@ -1,0 +1,6 @@
+# Optional local proxy used by your VPN application, one URL per line.
+# Examples (uncomment ONE working URL):
+# socks5h://127.0.0.1:10808
+# socks5h://127.0.0.1:7891
+# http://127.0.0.1:7890
+# Leave this file with comments only for system VPN / environment proxy.

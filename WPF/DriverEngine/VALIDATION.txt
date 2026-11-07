@@ -1,0 +1,12 @@
+Garant-PO v6.0 validation (development sandbox)
+- Node.js syntax check of UI code: PASS.
+- Chromium mock EventSource stream connection: PASS.
+- Scan -> zero target devices -> green completion message: PASS.
+- Streaming download state: 50%, 3.00 MB / 6.00 MB, 1.00 MB/s: PASS.
+- Completion after download: PASS.
+- Browser-only log export using Blob without server: PASS.
+- Browser console/page errors in test: NONE.
+- Native Windows Server.ps1 / C# Add-Type compilation: NOT TESTED (Windows PowerShell unavailable here).
+- DRP/VPN connectivity and actual driver installation: NOT TESTED in this version.
+
+Important: automated UI mocks are not proof of actual Windows integration. Use tests on a spare Windows 10/11 x64 PC before any production deployment.

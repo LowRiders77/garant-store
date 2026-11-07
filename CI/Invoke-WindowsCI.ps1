@@ -42,6 +42,22 @@ try {
     & $winPS -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extractedRoot 'ReleaseGate.ps1') -Phase Archive
     if ($LASTEXITCODE -ne 0) { throw 'Extracted-archive gate failed.' }
 
+    $phase = 'wpf-preview-gate'
+    Write-Host '=== Additional Windows gate: Garant Store Next WPF + Setup.exe ===' -ForegroundColor Cyan
+    & $winPS -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'WPF\\CI\\Invoke-WindowsGate.ps1') -CompileInstaller
+    if ($LASTEXITCODE -ne 0) { throw 'Garant Store Next WPF/installer gate failed.' }
+
+    $wpfSetup = Join-Path $root 'WPF\\dist\\GarantStore-Setup.exe'
+    if (-not (Test-Path -LiteralPath $wpfSetup -PathType Leaf)) { throw 'WPF setup.exe was not produced.' }
+    $previewSetup = Join-Path $output 'GarantStore-Setup.exe'
+    Copy-Item -LiteralPath $wpfSetup -Destination $previewSetup -Force
+    $wpfEvidence = Join-Path $output 'WPF-evidence'
+    New-Item -ItemType Directory -Force -Path $wpfEvidence | Out-Null
+    $wpfEvidenceSource = Join-Path $root 'WPF\\CI-output'
+    if (Test-Path -LiteralPath $wpfEvidenceSource) {
+        Copy-Item -Path (Join-Path $wpfEvidenceSource '*') -Destination $wpfEvidence -Recurse -Force
+    }
+
     $report = [ordered]@{
         schema = 1
         version = $version
@@ -50,6 +66,8 @@ try {
         windowsPowerShell = '5.1 Desktop'
         sourceGate = 'passed'
         archiveGate = 'passed'
+        wpfPreviewGate = 'passed'
+        setupSha256 = (Get-FileHash -LiteralPath $previewSetup -Algorithm SHA256).Hash.ToLowerInvariant()
         sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         createdAt = (Get-Date).ToUniversalTime().ToString('o')
     }
