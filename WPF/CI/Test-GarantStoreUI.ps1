@@ -450,6 +450,13 @@ try {
     Start-Sleep -Milliseconds 500
    }while([DateTime]::UtcNow -lt $until)
    if($installedCheck){
+    # The row can be read a moment before WPF has applied every binding of a
+    # refreshed snapshot. Re-read for up to 10 s; a state that stays wrong still fails.
+    $settleUntil=[DateTime]::UtcNow.AddSeconds(10)
+    while((-not $webRow -or -not $webRow.Checkbox -or $webRow.Checkbox.Current.IsEnabled -or $webRow.Text -notmatch 'Установлено') -and [DateTime]::UtcNow -lt $settleUntil){
+     Start-Sleep -Milliseconds 500
+     $webRow=Find-WebViewRow $components
+    }
     if(-not $webRow -or -not $webRow.Checkbox -or $webRow.Checkbox.Current.IsEnabled -or $webRow.Text -notmatch 'Установлено'){
      $rowText=if($webRow){[string]$webRow.Text}else{'<row not found>'}
      $checkboxState=if($webRow -and $webRow.Checkbox){'enabled='+[string]$webRow.Checkbox.Current.IsEnabled}else{'<no checkbox>'}
