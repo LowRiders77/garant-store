@@ -1,0 +1,100 @@
+{
+  "Schema": 1,
+  "Note": "Только бесплатные программы из официальных источников. Каждый ID проверяется в Windows CI (Test-CatalogIds).",
+  "Bundles": [
+    {
+      "Id": "after-reinstall",
+      "Title": "После переустановки",
+      "Description": "Базовые программы для нового или переустановленного ПК",
+      "Items": [
+        { "Name": "Google Chrome", "Id": "Google.Chrome", "Source": "winget", "Default": true },
+        { "Name": "7-Zip", "Id": "7zip.7zip", "Source": "winget", "Default": true },
+        { "Name": "Telegram", "Id": "Telegram.TelegramDesktop", "Source": "winget", "Default": true },
+        { "Name": "WhatsApp", "Id": "9NKSQGP7F2NH", "Source": "msstore", "Default": true },
+        { "Name": "AnyDesk", "Id": "AnyDesk.AnyDesk", "Source": "winget", "Default": true },
+        { "Name": "VLC", "Id": "VideoLAN.VLC", "Source": "winget", "Default": true },
+        { "Name": "Adobe Acrobat Reader", "Id": "Adobe.Acrobat.Reader.64-bit", "Source": "winget", "Default": true },
+        { "Name": "Opera", "Id": "Opera.Opera", "Source": "winget", "Default": false },
+        { "Name": "Zoom", "Id": "Zoom.Zoom", "Source": "winget", "Default": false },
+        { "Name": "Lightshot", "Id": "Skillbrains.Lightshot", "Source": "winget", "Default": false },
+        { "Name": "qBittorrent", "Id": "qBittorrent.qBittorrent", "Source": "winget", "Default": false }
+      ]
+    },
+    {
+      "Id": "vibe-coder",
+      "Title": "Вайб-кодер",
+      "Description": "Редакторы с ИИ, Git, Node.js и Python",
+      "Items": [
+        { "Name": "Visual Studio Code", "Id": "Microsoft.VisualStudioCode", "Source": "winget", "Default": true },
+        { "Name": "Cursor", "Id": "Anysphere.Cursor", "Source": "winget", "Default": true },
+        { "Name": "Git", "Id": "Git.Git", "Source": "winget", "Default": true },
+        { "Name": "Windows Terminal", "Id": "Microsoft.WindowsTerminal", "Source": "winget", "Default": true },
+        { "Name": "PowerShell 7", "Id": "Microsoft.PowerShell", "Source": "winget", "Default": true },
+        { "Name": "Node.js LTS", "Id": "OpenJS.NodeJS.LTS", "Source": "winget", "Default": true },
+        { "Name": "Python 3.14", "Id": "Python.Python.3.14", "Source": "winget", "Default": true },
+        { "Name": "GitHub Desktop", "Id": "GitHub.GitHubDesktop", "Source": "winget", "Default": false },
+        { "Name": "ChatGPT", "Id": "OpenAI.ChatGPT", "Source": "winget", "Default": false },
+        { "Name": "Claude", "Id": "Anthropic.Claude", "Source": "winget", "Default": false },
+        { "Name": "Docker Desktop (нужна виртуализация)", "Id": "Docker.DockerDesktop", "Source": "winget", "Default": false }
+      ]
+    },
+    {
+      "Id": "gamer",
+      "Title": "Геймер",
+      "Description": "Игровые магазины, общение и мониторинг. Драйвер видеокарты — в разделе «Драйверы»",
+      "Items": [
+        { "Name": "Steam", "Id": "Valve.Steam", "Source": "winget", "Default": true },
+        { "Name": "Epic Games Launcher", "Id": "EpicGames.EpicGamesLauncher", "Source": "winget", "Default": true },
+        { "Name": "Discord", "Id": "Discord.Discord", "Source": "winget", "Default": true },
+        { "Name": "GOG Galaxy", "Id": "GOG.Galaxy", "Source": "winget", "Default": false },
+        { "Name": "MSI Afterburner", "Id": "Guru3D.Afterburner", "Source": "winget", "Default": false },
+        { "Name": "OBS Studio", "Id": "OBSProject.OBSStudio", "Source": "winget", "Default": false }
+      ]
+    },
+    {
+      "Id": "office",
+      "Title": "Офис",
+      "Description": "Документы, PDF, связь и браузер",
+      "Items": [
+        { "Name": "LibreOffice", "Id": "TheDocumentFoundation.LibreOffice", "Source": "winget", "Default": true },
+        { "Name": "Adobe Acrobat Reader", "Id": "Adobe.Acrobat.Reader.64-bit", "Source": "winget", "Default": true },
+        { "Name": "7-Zip", "Id": "7zip.7zip", "Source": "winget", "Default": true },
+        { "Name": "Google Chrome", "Id": "Google.Chrome", "Source": "winget", "Default": true },
+        { "Name": "Zoom", "Id": "Zoom.Zoom", "Source": "winget", "Default": true },
+        { "Name": "Telegram", "Id": "Telegram.TelegramDesktop", "Source": "winget", "Default": true },
+        { "Name": "Notepad++", "Id": "Notepad++.Notepad++", "Source": "winget", "Default": false },
+        { "Name": "Everything (поиск файлов)", "Id": "voidtools.Everything", "Source": "winget", "Default": false }
+      ]
+    },
+    {
+      "Id": "service",
+      "Title": "Мастер-сервис",
+      "Description": "Диагностика, стресс-тесты, загрузочные флешки и удалённая помощь",
+      "Items": [
+        { "Name": "CrystalDiskInfo", "Id": "CrystalDewWorld.CrystalDiskInfo", "Source": "winget", "Default": true },
+        { "Name": "HWiNFO", "Id": "REALiX.HWiNFO", "Source": "winget", "Default": true },
+        { "Name": "CPU-Z", "Id": "CPUID.CPU-Z", "Source": "winget", "Default": true },
+        { "Name": "GPU-Z", "Id": "TechPowerUp.GPU-Z", "Source": "winget", "Default": true },
+        { "Name": "OCCT", "Id": "OCBase.OCCT.Personal", "Source": "winget", "Default": true },
+        { "Name": "Rufus", "Id": "Rufus.Rufus", "Source": "winget", "Default": true },
+        { "Name": "Ventoy", "Id": "Ventoy.Ventoy", "Source": "winget", "Default": true },
+        { "Name": "AnyDesk", "Id": "AnyDesk.AnyDesk", "Source": "winget", "Default": true },
+        { "Name": "Everything (поиск файлов)", "Id": "voidtools.Everything", "Source": "winget", "Default": false }
+      ]
+    },
+    {
+      "Id": "student",
+      "Title": "Студент",
+      "Description": "Учёба, документы и заметки",
+      "Items": [
+        { "Name": "LibreOffice", "Id": "TheDocumentFoundation.LibreOffice", "Source": "winget", "Default": true },
+        { "Name": "Adobe Acrobat Reader", "Id": "Adobe.Acrobat.Reader.64-bit", "Source": "winget", "Default": true },
+        { "Name": "Google Chrome", "Id": "Google.Chrome", "Source": "winget", "Default": true },
+        { "Name": "Zoom", "Id": "Zoom.Zoom", "Source": "winget", "Default": true },
+        { "Name": "Telegram", "Id": "Telegram.TelegramDesktop", "Source": "winget", "Default": true },
+        { "Name": "Obsidian", "Id": "Obsidian.Obsidian", "Source": "winget", "Default": false },
+        { "Name": "Notion", "Id": "Notion.Notion", "Source": "winget", "Default": false }
+      ]
+    }
+  ]
+}

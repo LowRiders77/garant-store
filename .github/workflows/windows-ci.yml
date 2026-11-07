@@ -21,13 +21,17 @@ concurrency:
 jobs:
   windows-gate:
     name: PowerShell 5.1, CMD, WinForms, regression, ZIP re-test
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 25
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Require registered WinGet and healthy sources
+        shell: pwsh
+        run: ./CI/Ensure-WinGet.ps1
 
       - name: Real Windows gate and exact extracted ZIP retest
         shell: cmd
