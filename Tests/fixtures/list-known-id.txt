@@ -1,0 +1,5 @@
+Name                    Id             Version       Available Source
+----------------------- --------------- ------------- --------- -------
+7-Zip 26.05 (x64)       7zip.7zip      26.05                   winget
+WhatsApp                 9NKSQGP7F2NH   2.2625.101.0            msstore
+Happ - Proxy Utility     Happ.Happ      < 4.3.0       4.6.1     winget

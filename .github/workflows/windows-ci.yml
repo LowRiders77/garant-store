@@ -1,0 +1,43 @@
+name: Garant Store - Windows CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - 'GarantStore_CI_Source_20261031.zip'
+      - 'GarantStore_CI_Source_20261031.zip.base64'
+      - '.github/workflows/bootstrap-source.yml'
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garant-store-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-gate:
+    name: PowerShell 5.1, CMD, WinForms, regression, ZIP re-test
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Real Windows gate and exact extracted ZIP retest
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "CI\Invoke-WindowsCI.ps1"
+
+      - name: Upload CI evidence (not a distribution)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ci-evidence-${{ github.run_id }}
+          path: CI-output/
+          if-no-files-found: warn
+          retention-days: 14

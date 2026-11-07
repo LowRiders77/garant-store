@@ -1,0 +1,4 @@
+Name          Id                         Version   Match         Source
+------------- -------------------------- --------- ------------- -------
+WhatsApp      9NKSQGP7F2NH               Unknown                 msstore
+WAutoChat     AloproAgency.WAutoChat     1.2.29    Tag: whatsapp winget

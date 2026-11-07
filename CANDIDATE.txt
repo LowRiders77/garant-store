@@ -1,0 +1,2 @@
+0.8.0-dev
+Single development branch. Windows full release gate not run. NOT VERIFIED.

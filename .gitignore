@@ -1,0 +1,14 @@
+# Generated logs, user diagnostics, releases and caches: never commit.
+Releases/
+CI-output/
+DEV-VALIDATION.log
+*.log
+diagnostics-*.zip
+last-result*.json
+*.tmp
+*.bak
+*.cache
+__pycache__/
+.vs/
+.vscode/
+.DS_Store

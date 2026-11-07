@@ -1,0 +1,70 @@
+name: Garant Store - publish requested verified milestone
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'RELEASE_REQUEST.txt'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: garant-store-publish-milestone
+  cancel-in-progress: false
+
+jobs:
+  verified-milestone:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enforce explicit milestone, version and channel
+        shell: pwsh
+        run: |
+          $requested=(Get-Content -LiteralPath RELEASE_REQUEST.txt -Raw).Trim()
+          $version=(Get-Content -LiteralPath VERSION.txt -Raw).Trim()
+          if ($requested -cne $version) { throw 'Release request/version mismatch.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Only stable semantic versions can be published.' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Refusing to publish from a development branch.' }
+
+      - name: Real Windows verified builder - source and extracted ZIP
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "Build-VerifiedRelease.ps1" -OutputDirectory "Releases"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ github.run_id }}
+          path: |
+            Releases/*.release-report.json
+            Releases/*-release-gate.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Verify final artifact and publish milestone
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $version=(Get-Content -LiteralPath VERSION.txt -Raw).Trim()
+          $tag='v'+$version
+          $zip=Join-Path Releases ('GarantStore-v'+$version+'-VERIFIED.zip')
+          $reportPath=Join-Path Releases ('GarantStore-v'+$version+'-VERIFIED.release-report.json')
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'VERIFIED ZIP is missing.' }
+          if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Verification report missing.' }
+          $report=Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          $sha=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($report.verified -ne $true -or $report.version -cne $version -or $report.sha256 -ne $sha) { throw 'Version/hash/verification mismatch.' }
+          $checksum="$sha  GarantStore-v$version-VERIFIED.zip"
+          [IO.File]::WriteAllText('Releases/SHA256SUMS.txt',$checksum+"\n",(New-Object Text.UTF8Encoding($false)))
+          gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'This release already exists; refusing duplicate publication.' }
+          gh release create $tag $zip $reportPath 'Releases/SHA256SUMS.txt' --repo $env:GH_REPO --target $env:GITHUB_SHA --title "Garant Store v$version" --notes-file CHANGELOG.md --latest
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release upload failed.' }

@@ -1,0 +1,19 @@
+GARANT STORE 0.8 PRESENTATION DEV - WINDOWS VALIDATION
+
+1. Run Validate-DEV.cmd. It must pass Windows PowerShell 5.1, all regressions,
+   CMD metacharacter/smoke, real GUI smoke and presentation layout check.
+2. Normal launch: no PowerShell fatal error or C# Add-Type error.
+3. Layout: resize window to minimum; all panels and actions remain visible,
+   result view never overlaps footer. Restore/maximize and verify same.
+4. Search WhatsApp: preview rows visible before final statuses; status and source
+   capsules correctly render. Check installed vs not installed labels.
+5. Search CapCut, Microsoft To Do, and nonsense string qwertygarant99999.
+   Nonsense returns a friendly zero-results view, not an exception.
+6. Search same item twice to check speed and cached result.
+7. Check explicit Store source agreement prompt on a fresh user profile.
+8. Install a small app only if desired; verify progress remains indeterminate
+   when there are no reliable download bytes/total and final verification succeeds.
+9. Run diagnostics ZIP and check logs if issues remain.
+
+DEV is NOT VERIFIED until tested on Windows. Do not publish to others as
+stable production software based only on static archive validation.
