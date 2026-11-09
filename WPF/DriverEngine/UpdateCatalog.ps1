@@ -34,7 +34,7 @@ function Get-GSWuaInstallOutcome([int]$ResultCode,[int]$HResult){
  if($HResult -eq -2147024637){return 'NotNeeded'}
  return 'Failed'
 }
-function Format-GSHResult([int]$HResult){return ('0x'+([uint32]([int64]$HResult -band 0xFFFFFFFF)).ToString('X8'))}
+function Format-GSHResult([int]$HResult){return ('0x{0:X8}' -f $HResult)}
 
 function Get-MatchedWindowsDriverUpdateIds($Devices,$Updates) {
  $matched=New-Object System.Collections.Generic.List[string]
