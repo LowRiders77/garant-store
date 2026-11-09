@@ -99,7 +99,7 @@ function Get-CimInstance {
   'Win32_Processor'{[pscustomobject]@{Name='AMD Ryzen 5 5600X 6-Core Processor             ';NumberOfCores=6;NumberOfLogicalProcessors=12}}
   'Win32_VideoController'{[pscustomobject]@{Name='NVIDIA GeForce RTX 5060';AdapterRAM=4293918720}}
   'Win32_PhysicalMemory'{1..2|ForEach-Object{[pscustomobject]@{Capacity=8589934592;SMBIOSMemoryType=26;ConfiguredClockSpeed=3200;Speed=3200;Manufacturer='Unknown';PartNumber=''}}}
-  'MSFT_PhysicalDisk'{[pscustomobject]@{FriendlyName='Realtek RTL9210 NVME';Size=512110190592;BusType=7;MediaType=4;DeviceId='1'};[pscustomobject]@{FriendlyName='BIWIN NV7400 1TB';Size=1024209543168;BusType=17;MediaType=4;DeviceId='0'}}
+  'MSFT_PhysicalDisk'{[pscustomobject]@{FriendlyName='Realtek RTL9210 NVME';Size=512110190592;BusType='USB';MediaType='SSD';DeviceId='1'};[pscustomobject]@{FriendlyName='BIWIN NV7400 1TB';Size=1024209543168;BusType='NVMe';MediaType='SSD';DeviceId='0'}}
   'WmiMonitorConnectionParams'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';VideoOutputTechnology=[uint32]10}}
   'WmiMonitorID'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';ManufacturerName=[uint16[]][char[]]'LHC';ProductCodeID=[uint16[]][char[]]'0001';UserFriendlyName=[uint16[]][char[]]'N27SH2'}}
   'Win32_Battery'{}
@@ -131,4 +131,8 @@ $laptopRaw=Get-GSSummaryRaw
 Assert-Equal @($laptopRaw.Panels).Count 1 'Internal panel collected'
 Assert-Equal $laptopRaw.Panels[0].Internal $true 'Internal panel flagged'
 
+Assert-Equal (ConvertTo-GSStorageCode 'NVMe' 'Bus') 17 'Bus name mapped'
+Assert-Equal (ConvertTo-GSStorageCode 'SATA' 'Bus') 11 'SATA mapped'
+Assert-Equal (ConvertTo-GSStorageCode ([uint16]7) 'Bus') 7 'Numeric bus kept'
+Assert-Equal (ConvertTo-GSStorageCode 'HDD' 'Media') 3 'Media name mapped'
 Write-Host 'System summary gate passed: model names, CPU incl. engineering samples, GPU VRAM/integrated, RAM kit format, internal storage only, EDID panel, battery health, safe file name.'

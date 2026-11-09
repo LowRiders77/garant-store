@@ -291,6 +291,27 @@ function ConvertTo-GSSafeFileName([string]$Name){
  return $clean
 }
 
+function Get-GSCimRawValue($Object,[string]$Name){
+ # Raw CIM value: once the Storage module is loaded (Get-Partition), Windows
+ # PowerShell shows MSFT_PhysicalDisk.BusType as "NVMe" and MediaType as "SSD"
+ # instead of numbers, and [int] on those strings broke the whole summary.
+ if($null -eq $Object){return $null}
+ try{$cim=$Object.CimInstanceProperties;if($null -ne $cim -and $null -ne $cim[$Name]){return $cim[$Name].Value}}catch{}
+ $property=$Object.PSObject.Properties[$Name]
+ if($null -eq $property){return $null}
+ return $property.Value
+}
+
+function ConvertTo-GSStorageCode($Value,[ValidateSet('Bus','Media')][string]$Kind){
+ if($null -eq $Value){return 0}
+ $text=([string]$Value).Trim()
+ $number=0
+ if([int]::TryParse($text,[ref]$number)){return $number}
+ $map=if($Kind -eq 'Bus'){@{'SCSI'=1;'ATAPI'=2;'ATA'=3;'1394'=4;'SSA'=5;'Fibre Channel'=6;'USB'=7;'RAID'=8;'iSCSI'=9;'SAS'=10;'SATA'=11;'SD'=12;'MMC'=13;'Virtual'=14;'File Backed Virtual'=15;'Storage Spaces'=16;'NVMe'=17;'SCM'=18;'UFS'=19}}else{@{'Unspecified'=0;'HDD'=3;'SSD'=4;'SCM'=5}}
+ foreach($key in $map.Keys){if([string]::Equals($key,$text,[StringComparison]::OrdinalIgnoreCase)){return [int]$map[$key]}}
+ return 0
+}
+
 # ---------------------------------------------------------------------------
 # Collection (Windows only). Every source is optional; failures leave gaps
 # that the formatters render as "Не определено" instead of breaking the report.
@@ -331,7 +352,8 @@ function Get-GSSummaryRaw {
 
  $systemDiskNumber=-1
  try{$systemDiskNumber=[int](Get-Partition -DriveLetter ($env:SystemDrive.TrimEnd(':')) -ErrorAction Stop).DiskNumber}catch{}
- $disks=@(Get-GSCimSafe MSFT_PhysicalDisk 'root/Microsoft/Windows/Storage'|ForEach-Object{[pscustomobject]@{FriendlyName=[string]$_.FriendlyName;Size=[double]$_.Size;BusType=[int]$_.BusType;MediaType=[int]$_.MediaType;IsSystem=([string]$_.DeviceId -eq [string]$systemDiskNumber)}})
+ $disks=@()
+ try{$disks=@(Get-GSCimSafe MSFT_PhysicalDisk 'root/Microsoft/Windows/Storage'|ForEach-Object{[pscustomobject]@{FriendlyName=[string]$_.FriendlyName;Size=[double](Get-GSCimRawValue $_ 'Size');BusType=(ConvertTo-GSStorageCode (Get-GSCimRawValue $_ 'BusType') 'Bus');MediaType=(ConvertTo-GSStorageCode (Get-GSCimRawValue $_ 'MediaType') 'Media');IsSystem=([string](Get-GSCimRawValue $_ 'DeviceId') -eq [string]$systemDiskNumber)}})}catch{}
 
  $panels=New-Object System.Collections.Generic.List[object]
  $connections=@{}
