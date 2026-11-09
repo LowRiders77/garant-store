@@ -2,6 +2,7 @@
 $ErrorActionPreference='Stop'
 try {
  . (Join-Path $PSScriptRoot 'DriverEngine\SystemProfile.ps1')
+ . (Join-Path $PSScriptRoot 'GarantStore.SystemSummary.ps1')
  $watch=[Diagnostics.Stopwatch]::StartNew()
  $profile=Get-GSComputerProfile
  $profile|Add-Member -NotePropertyName details -NotePropertyValue (Get-GSSystemDetail)
@@ -18,6 +19,8 @@ try {
   if(Test-Path -LiteralPath $historyPath){try{$history=@(Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8|ConvertFrom-Json);break}catch{}}
  }
  $profile|Add-Member -NotePropertyName history -NotePropertyValue ($history)
+ # Plain-language first page: model, CPU, GPU, RAM, storage, panel, battery.
+ try{$profile|Add-Member -NotePropertyName summary -NotePropertyValue (New-GSSystemSummary (Get-GSSummaryRaw))}catch{$profile|Add-Member -NotePropertyName summaryError -NotePropertyValue $_.Exception.Message}
  $profile|Add-Member -NotePropertyName collectionMs -NotePropertyValue ($watch.ElapsedMilliseconds)
  $json=$profile|ConvertTo-Json -Depth 9
  [IO.File]::WriteAllText($OutputPath,$json,[Text.UTF8Encoding]::new($false))

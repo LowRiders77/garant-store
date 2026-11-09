@@ -30,11 +30,15 @@ function Load-JsonFile([string]$path, $fallback) {
 function Get-RemainingSelectedProblemDevices($Inventory,[string[]]$InstanceIds) {
   # Inventory rows document a working installed driver; only actionable PnP
   # problem states count as unresolved after an install/rescan.
+  # Scripts that dot-source UpdateCatalog.ps1 run under Set-StrictMode, where a
+  # row without instanceId/kind (or a null row) would throw instead of being skipped.
   $problemKinds=@('Missing','Issue','GPU')
   return @($Inventory|Where-Object{
-    $id=[string]$_.instanceId
-    $kind=[string]$_.kind
-    $InstanceIds -contains $id -and $problemKinds -contains $kind
+    if($null -eq $_){return $false}
+    $idProperty=$_.PSObject.Properties['instanceId'];$kindProperty=$_.PSObject.Properties['kind']
+    $id=if($idProperty){[string]$idProperty.Value}else{''}
+    $kind=if($kindProperty){[string]$kindProperty.Value}else{''}
+    $id -and $InstanceIds -contains $id -and $problemKinds -contains $kind
   })
 }
 function Test-GSDownloadResponse([int]$ExitCode,[string]$HttpStatus,[string]$ContentType,[long]$Bytes,[bool]$IsHtml,[long]$ExpectedBytes=0,[long]$ExistingBytes=0,[string]$ContentRange='') {

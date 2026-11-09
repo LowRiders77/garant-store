@@ -27,6 +27,15 @@ function Get-GSWuaComparableHardwareIds($Values) {
  return ,$ids
 }
 
+function Get-GSWuaInstallOutcome([int]$ResultCode,[int]$HResult){
+ # 2/3 = succeeded (with errors). 0x80070103 means Windows kept an equal or
+ # better driver that is already installed: nothing to do, not a failure.
+ if($ResultCode -in @(2,3)){return 'Installed'}
+ if($HResult -eq -2147024637){return 'NotNeeded'}
+ return 'Failed'
+}
+function Format-GSHResult([int]$HResult){return ('0x'+([uint32]([int64]$HResult -band 0xFFFFFFFF)).ToString('X8'))}
+
 function Get-MatchedWindowsDriverUpdateIds($Devices,$Updates) {
  $matched=New-Object System.Collections.Generic.List[string]
  foreach($device in @($Devices)){

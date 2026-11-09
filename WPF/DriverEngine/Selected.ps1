@@ -77,7 +77,7 @@ try{
   $refreshStatus=Load-JsonFile $script:StatusFile ([pscustomobject]@{})
   if($refresh.ExitCode -ne 0 -or [int](Get-GSSelectedChildProperty $refreshStatus 'errors' 0) -gt 0){$script:SelectedTask.errors++;$script:SelectedTask.lastError=[string](Get-GSSelectedChildProperty $refreshStatus 'message' 'Повторное сканирование завершилось с ошибкой')}
   if($libraries.Contains('webview2')){
-   $installedRow=@(Load-JsonFile $script:DeviceFile @() | Where-Object { [string]$_.instanceId -eq 'LIBRARY|webview2' } | Select-Object -First 1)
+   $installedRow=@(Load-JsonFile $script:DeviceFile @() | Where-Object { $null -ne $_ -and [string](Get-GSSelectedChildProperty $_ 'instanceId' '') -eq 'LIBRARY|webview2' } | Select-Object -First 1)
    if($installedRow.Count -ne 1 -or [string]$installedRow[0].libraryStatus -ne 'Установлено' -or [bool]$installedRow[0].canSelect){
     $script:SelectedTask.errors++
     $script:SelectedTask.lastError='После установки и повторного сканирования WebView2 не подтверждён.'

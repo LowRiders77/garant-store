@@ -1,4 +1,27 @@
 ﻿$script:gsSystemCache=@{Profile=$null}
+. (Join-Path $PSScriptRoot 'GarantStore.SystemSummary.ps1')
+function Get-GSSystemSummaryRows($Profile){
+ # First page of the report and the first card: what an ordinary user recognises.
+ $summary=$null;if($Profile -and $Profile.PSObject.Properties['summary']){$summary=$Profile.summary}
+ if($null -eq $summary){
+  $model=Format-GSModelName ([string]$Profile.manufacturer) ([string]$Profile.model) '' ([string]$Profile.boardModel) ([Environment]::MachineName)
+  return [pscustomobject][ordered]@{'Название и модель'=$model;'Процессор'=[string]$Profile.processor;'ОЗУ'=$(if([double]$Profile.memoryBytes -gt 0){[string][math]::Round([double]$Profile.memoryBytes/1GB)+'GB'}else{'Не определено'})}
+ }
+ $displayLabel=if([string]$summary.Kind -eq 'Ноутбук'){'Матрица'}else{'Монитор'}
+ return [pscustomobject][ordered]@{
+  'Название и модель'=([string]$summary.Kind+' '+[string]$summary.Model)
+  'Процессор'=[string]$summary.Processor
+  'Видеокарта'=[string]$summary.Graphics
+  'ОЗУ'=[string]$summary.Memory
+  'Накопитель'=[string]$summary.Storage
+  $displayLabel=[string]$summary.Display
+  'Аккумулятор'=[string]$summary.Battery
+ }
+}
+function Get-GSSystemDisplayName($Profile){
+ if($Profile -and $Profile.PSObject.Properties['summary'] -and $Profile.summary){return [string]$Profile.summary.Model}
+ return Format-GSModelName ([string]$Profile.manufacturer) ([string]$Profile.model) '' ([string]$Profile.boardModel) ([Environment]::MachineName)
+}
 function Get-GSSystemValue($Object,[string]$Name) {
  if($null -eq $Object){return 'Не определено'}
  $p=$Object.PSObject.Properties[$Name]
@@ -7,6 +30,8 @@ function Get-GSSystemValue($Object,[string]$Name) {
 }
 function Get-GSSystemCards($Profile,[scriptblock]$GetValue) {
  $cards=New-Object System.Collections.Generic.List[object]
+ $summaryRows=Get-GSSystemSummaryRows $Profile
+ $cards.Add([pscustomobject]@{Title='Сводка';Text=(@($summaryRows.PSObject.Properties|ForEach-Object{$_.Name+': '+[string]$_.Value}) -join "`n")})
  $cards.Add([pscustomobject]@{Title='Компьютер';Text=((& $GetValue $Profile 'manufacturer'),(& $GetValue $Profile 'model'),('Плата: '+(& $GetValue $Profile 'boardModel')),('BIOS/UEFI: '+(& $GetValue $Profile 'biosVersion'))) -join "`n"})
  $cards.Add([pscustomobject]@{Title='Процессор и память';Text=((& $GetValue $Profile 'processor'),('Ядра: '+(& $GetValue $Profile 'cores')+' • потоки: '+(& $GetValue $Profile 'logicalProcessors')),('RAM: '+$(if($Profile.memoryBytes -gt 0){[math]::Round($Profile.memoryBytes/1GB,1).ToString()+' ГБ'}else{'Не определено'}))) -join "`n"})
  $cards.Add([pscustomobject]@{Title='Windows';Text=((& $GetValue $Profile 'edition'),('Build '+(& $GetValue $Profile 'build')+' • '+(& $GetValue $Profile 'osArchitecture')),('PowerShell '+(& $GetValue $Profile 'powerShell'))) -join "`n"})
@@ -45,13 +70,14 @@ function Set-GSSystemProfile($State,$Profile,[scriptblock]$FormatCards,[scriptbl
 function Export-GSSystemProfile($State,[string]$Path,[bool]$FullReport) {
  if(-not $State.Profile){throw 'Сведения ещё не получены.'}
  $snapshot=[ordered]@{schemaVersion=1}
- foreach($field in @('capturedUtc','manufacturer','model','machineType','boardManufacturer','boardModel','biosVersion','processor','processorManufacturer','cores','logicalProcessors','memoryBytes','windows','edition','displayVersion','build','osArchitecture','powerShell','windowsUpdateService','installedDriverCount','problemDeviceCount','services','collectionMs','details')){
+ foreach($field in @('capturedUtc','manufacturer','model','machineType','boardManufacturer','boardModel','biosVersion','processor','processorManufacturer','cores','logicalProcessors','memoryBytes','windows','edition','displayVersion','build','osArchitecture','powerShell','windowsUpdateService','installedDriverCount','problemDeviceCount','services','collectionMs','summary','details')){
   $property=$State.Profile.PSObject.Properties[$field]
   if($property){$snapshot[$field]=$property.Value}
  }
  if($FullReport){$snapshot.computerName=[Environment]::MachineName}
  $sections=[ordered]@{
-  'Сводка'=@([pscustomobject]@{Производитель=$snapshot.manufacturer;Модель=$snapshot.model;Процессор=$snapshot.processor;ОЗУ_байт=$snapshot.memoryBytes;Windows=$snapshot.edition;Сборка=$snapshot.build})
+  'Сводка'=@(Get-GSSystemSummaryRows $State.Profile)
+  'Windows'=@([pscustomobject][ordered]@{'Система'=$snapshot.edition;'Версия'=$snapshot.displayVersion;'Сборка'=$snapshot.build})
   'Драйверы'=@([pscustomobject]@{Установлено=$snapshot.installedDriverCount;Проблемных=$snapshot.problemDeviceCount})
   'Системные службы'=@($snapshot.services)
  }
@@ -91,9 +117,10 @@ function Export-GSSystemProfile($State,[string]$Path,[bool]$FullReport) {
    if($html){[void]$content.AppendLine('</section>')}
   }
   if($html){
-   $date=[Net.WebUtility]::HtmlEncode([string]$snapshot.capturedUtc)
+   $date=[Net.WebUtility]::HtmlEncode(([datetime]$snapshot.capturedUtc).ToLocalTime().ToString('dd.MM.yyyy HH:mm'))
+   $systemName=[Net.WebUtility]::HtmlEncode((Get-GSSystemDisplayName $State.Profile))
    $document=@"
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Garant Store · Системный отчёт</title>
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>$systemName · Garant Store</title>
 <style>
 :root{color-scheme:dark;--bg:#101413;--panel:#1a221e;--text:#eef5ef;--muted:#b7c5bc;--accent:#70e2aa;--line:#3b5145}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,sans-serif}
@@ -102,7 +129,7 @@ h1,h2{margin:.25em 0}p{color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:8p
 a{color:var(--accent);border:1px solid var(--line);border-radius:8px;padding:5px 10px}section{margin:18px 0;padding:16px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
 table{width:100%;table-layout:fixed;border-collapse:collapse;margin:12px 0}th,td{text-align:left;vertical-align:top;padding:6px 8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}th{width:40%;color:var(--muted)}
 @page{size:A4;margin:14mm}@media print{:root{color-scheme:light;--bg:white;--panel:white;--text:#111;--muted:#333;--accent:#13603e;--line:#ccc}main{padding:0}nav{display:none}section{padding:0;border:0}h2{break-after:avoid}tr{break-inside:avoid}}
-</style><main><header><h1>Garant Store</h1><p>Системный отчёт · $date</p></header><nav aria-label="Оглавление">$nav</nav>$content</main></html>
+</style><main><header><h1>$systemName</h1><p>Системный отчёт Garant Store · $date</p></header><nav aria-label="Оглавление">$nav</nav>$content</main></html>
 "@
   }else{$document=$content.ToString()}
  }
@@ -136,9 +163,11 @@ function New-GSSystemPage([string]$ProjectRoot) {
  $formatCards=${function:Get-GSSystemCards}
  $getValue=${function:Get-GSSystemValue}
  $exportProfile=${function:Export-GSSystemProfile}
+ $displayName=${function:Get-GSSystemDisplayName}
+ $safeFileName=${function:ConvertTo-GSSafeFileName}
  $state.Refresh.Add_Click({& $refreshProfile $state}.GetNewClosure())
  $state.Copy.Add_Click({try{[Windows.Clipboard]::SetText($state.Text);$state.Status.Text='Характеристики скопированы'}catch{$state.Status.Text=$_.Exception.Message}}.GetNewClosure())
- $state.Export.Add_Click({try{$d=[Microsoft.Win32.SaveFileDialog]::new();$d.Title='Garant Store: экспорт отчёта';$d.Filter='HTML|*.html|Текст|*.txt|JSON|*.json';$d.FileName='Garant-System.html';if($d.ShowDialog($state.Window)){& $exportProfile $state $d.FileName ([bool]$state.Full.IsChecked);$state.Status.Text='Отчёт сохранён'}}catch{$state.Status.Text=$_.Exception.Message}}.GetNewClosure())
+ $state.Export.Add_Click({try{$d=[Microsoft.Win32.SaveFileDialog]::new();$d.Title='Garant Store: экспорт отчёта';$d.Filter='HTML|*.html|Текст|*.txt|JSON|*.json';$d.FileName=('Garant-System - '+(& $safeFileName (& $displayName $state.Profile))+'.html');if($d.ShowDialog($state.Window)){& $exportProfile $state $d.FileName ([bool]$state.Full.IsChecked);$state.Status.Text='Отчёт сохранён'}}catch{$state.Status.Text=$_.Exception.Message}}.GetNewClosure())
  $state.Timer.Add_Tick({
   if(-not $state.Process){return}
   try{
