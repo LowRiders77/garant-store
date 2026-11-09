@@ -103,7 +103,7 @@ function Invoke-GSNativeProcess {
         [Parameter(Mandatory=$true)][string]$FileName,
         [string[]]$Arguments = @(),
         [int]$TimeoutSeconds = 300,
-        [ValidateSet('None','Store')][string]$TelemetryKind = 'None'
+        [ValidateSet('None','Store','Download')][string]$TelemetryKind = 'None'
     )
 
     $psi = New-Object Diagnostics.ProcessStartInfo
@@ -129,6 +129,8 @@ function Invoke-GSNativeProcess {
     try {
         if ($TelemetryKind -eq 'Store') {
             $telemetry = Start-GSStoreTelemetry
+        } elseif ($TelemetryKind -eq 'Download') {
+            $telemetry = Start-GSDownloadTelemetry
         }
 
         if (-not $process.Start()) {
@@ -155,6 +157,8 @@ function Invoke-GSNativeProcess {
 
             if ($TelemetryKind -eq 'Store' -and $null -ne $telemetry) {
                 Update-GSStoreTelemetry -State $telemetry
+            } elseif ($TelemetryKind -eq 'Download' -and $null -ne $telemetry) {
+                Update-GSDownloadTelemetry -State $telemetry
             }
         }
 
@@ -176,6 +180,57 @@ function Invoke-GSNativeProcess {
     } finally {
         $stopwatch.Stop()
         $process.Dispose()
+    }
+}
+
+function Start-GSDownloadTelemetry {
+    # WinGet (non-Store) downloads the installer into %TEMP%\WinGet before
+    # running it. Watching that folder gives real bytes and speed without
+    # parsing the console progress bar.
+    $root = Join-Path ([IO.Path]::GetTempPath()) 'WinGet'
+    return @{
+        Root = $root
+        Started = (Get-Date).AddSeconds(-2)
+        LastBytes = [UInt64]0
+        LastSample = Get-Date
+        LastGrowth = [datetime]::MinValue
+        LastSpeed = [double]0
+        LastWrite = [datetime]::MinValue
+        Phase = 'Preparing'
+    }
+}
+
+function Get-GSDownloadFolderBytes {
+    param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][datetime]$Since)
+    $total = [UInt64]0
+    if (-not [IO.Directory]::Exists($Root)) { return $total }
+    try {
+        foreach ($file in ([IO.DirectoryInfo]$Root).EnumerateFiles('*',[IO.SearchOption]::AllDirectories)) {
+            try { if ($file.LastWriteTime -ge $Since) { $total += [UInt64]$file.Length } } catch {}
+        }
+    } catch {}
+    return $total
+}
+
+function Update-GSDownloadTelemetry {
+    param([Parameter(Mandatory=$true)][hashtable]$State)
+    $now = Get-Date
+    if (($now - [datetime]$State.LastWrite).TotalMilliseconds -lt 700) { return }
+    $State.LastWrite = $now
+    $bytes = Get-GSDownloadFolderBytes -Root ([string]$State.Root) -Since ([datetime]$State.Started)
+    $seconds = [Math]::Max(0.1,($now - [datetime]$State.LastSample).TotalSeconds)
+    if ($bytes -gt [UInt64]$State.LastBytes) {
+        $instant = ([double]($bytes - [UInt64]$State.LastBytes)) / $seconds
+        $State.LastSpeed = if ([double]$State.LastSpeed -gt 0) { ([double]$State.LastSpeed * 0.65) + ($instant * 0.35) } else { $instant }
+        $State.LastGrowth = $now
+        $State.Phase = 'Downloading'
+    }
+    $State.LastBytes = $bytes
+    $State.LastSample = $now
+    if ($State.Phase -eq 'Downloading' -and ($now - [datetime]$State.LastGrowth).TotalSeconds -gt 3) { $State.Phase = 'Installing' }
+    switch ([string]$State.Phase) {
+        'Downloading' { Write-GSProgress -Stage 'Downloading' -Indeterminate $true -BytesDownloaded $bytes -SpeedBytesPerSecond ([double]$State.LastSpeed) -Detail 'WinGetDownload' }
+        'Installing' { Write-GSProgress -Stage 'Installing' -Indeterminate $true -BytesDownloaded $bytes -Detail 'WinGetInstaller' }
     }
 }
 
@@ -297,6 +352,9 @@ function Get-GSWingetTelemetryKind {
         ($argList -contains '--source') -and ($argList -contains 'msstore')) {
         return 'Store'
     }
+    if ($argList.Count -gt 0 -and $argList[0] -in @('install','upgrade')) {
+        return 'Download'
+    }
 
     return 'None'
 }
@@ -333,6 +391,14 @@ function Invoke-GSWinget {
 
     if ($result.ExitCode -eq -2147023838 -or $combinedOutput -match '(?i)0x80070422') {
         throw (New-GSClassifiedException -Code 'StoreServiceDisabled' -Message 'Microsoft Store operation failed with 0x80070422 (ERROR_SERVICE_DISABLED).')
+    }
+
+    # Old WinGet (1.6 on fresh Windows 11) pins a Microsoft Store certificate
+    # the service no longer uses. Package commands then fail as "not found";
+    # report the real cause so the UI can offer system preparation.
+    $command = if ($Arguments.Count) { ([string]$Arguments[0]).ToLowerInvariant() } else { '' }
+    if ($result.ExitCode -ne 0 -and $command -in @('install','upgrade','show','list') -and $combinedOutput -match '(?i)0x8a15005e|server certificate did not match') {
+        throw (New-GSClassifiedException -Code 'NeedsPreparation' -Message 'Microsoft Store source rejected by this WinGet version (0x8a15005e). WinGet must be updated.')
     }
 
     $agreementRequirement = Get-GSWingetAgreementRequirement `

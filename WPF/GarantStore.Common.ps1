@@ -319,6 +319,8 @@ function ConvertFrom-GSException {
     if ($explicitError.Success) {
         $code = [string]$explicitError.Groups[1].Value
         $message = ([string]$explicitError.Groups[2].Value).Trim()
+    } elseif ($message -match '(?i)0x8a15005e|server certificate did not match') {
+        $code = 'NeedsPreparation'
     } elseif ($message -match '(?i)0xC0000005|ACCESS_VIOLATION|WINGET_ACCESS_VIOLATION') {
         $code = 'AccessViolation'
     } elseif ($message -match '(?i)0x80073CF3|dependency') {
@@ -339,6 +341,10 @@ function ConvertFrom-GSException {
         'NeedsRepair' {
             $status = 'NeedsRepair'
             $userMessage = 'WinGet or App Installer requires repair.'
+        }
+        'NeedsPreparation' {
+            $status = 'NeedsPreparation'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/QtdGA0LXQtCDRg9GB0YLQsNC90L7QstC60L7QuSDQv9GA0L7Qs9GA0LDQvNC8INC90YPQttC90L4g0L/QvtC00LPQvtGC0L7QstC40YLRjCDRgdC40YHRgtC10LzRgzog0L7QsdC90L7QstC40YLRjCBXaW5HZXQg0Lgg0LrQvtC80L/QvtC90LXQvdGC0YsgTWljcm9zb2Z0IFN0b3JlLiDQndCw0LbQvNC40YLQtSDCq9Cf0L7QtNCz0L7RgtC+0LLQuNGC0Ywg0YHQuNGB0YLQtdC80YPCuy4='))
         }
         'AccessViolation' {
             $status = 'NeedsRepair'

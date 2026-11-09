@@ -209,38 +209,138 @@ function Restore-GSStoreServiceStartupTypes {
     $script:GSStoreServiceBaseline=$null
 }
 
+function Get-GSDownloadSpeed {
+    # Exponential moving average so the shown speed does not jump around.
+    param([double]$Previous,[double]$Sample,[double]$Weight = 0.3)
+    if ($Previous -le 0) { return $Sample }
+    return (($Weight * $Sample) + ((1 - $Weight) * $Previous))
+}
+
+function Invoke-GSStreamDownload {
+    # One HTTP attempt. Resumes from an existing .partial file with a Range
+    # request; restarts from zero if the server ignores the range.
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter(Mandatory=$true)][string]$PartialPath,
+        [string]$Label = ''
+    )
+    $offset = [int64]0
+    if (Test-Path -LiteralPath $PartialPath) { $offset = [int64](Get-Item -LiteralPath $PartialPath).Length }
+
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($Uri)
+    $request.Method = 'GET'
+    $request.UserAgent = 'GarantStore/1.0'
+    $request.AllowAutoRedirect = $true
+    $request.MaximumAutomaticRedirections = 10
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 60000
+    $request.AutomaticDecompression = [Net.DecompressionMethods]::None
+    if ($offset -gt 0) { $request.AddRange($offset) }
+
+    $response = $null
+    $stream = $null
+    $file = $null
+    try {
+        try {
+            $response = [Net.HttpWebResponse]$request.GetResponse()
+        } catch [Net.WebException] {
+            $errorResponse = $_.Exception.Response
+            if ($offset -gt 0 -and $null -ne $errorResponse -and [int]$errorResponse.StatusCode -eq 416) {
+                # Range not satisfiable: the partial file is already complete.
+                $errorResponse.Close()
+                return [int64]$offset
+            }
+            throw
+        }
+        $status = [int]$response.StatusCode
+        $append = ($offset -gt 0 -and $status -eq 206)
+        if (-not $append) { $offset = 0 }
+        $length = [int64]$response.ContentLength
+        $total = if ($length -gt 0) { $offset + $length } else { [int64]0 }
+
+        $mode = if ($append) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+        $file = New-Object IO.FileStream($PartialPath,$mode,[IO.FileAccess]::Write,[IO.FileShare]::None,81920)
+        $stream = $response.GetResponseStream()
+        $buffer = New-Object byte[] 81920
+        $done = $offset
+        $speed = 0.0
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $lastTicks = [int64]0
+        $lastBytes = $done
+        Write-GSProgress -Stage 'Downloading' -Percent $(if ($total -gt 0) { [int](100 * $done / $total) } else { 0 }) -Indeterminate ($total -le 0) -BytesDownloaded $done -BytesTotal $total -SpeedBytesPerSecond 0 -Detail $Label
+        while (($read = $stream.Read($buffer,0,$buffer.Length)) -gt 0) {
+            $file.Write($buffer,0,$read)
+            $done += $read
+            $elapsed = $clock.ElapsedMilliseconds - $lastTicks
+            if ($elapsed -ge 500) {
+                $speed = Get-GSDownloadSpeed -Previous $speed -Sample (($done - $lastBytes) * 1000.0 / $elapsed)
+                $lastTicks = $clock.ElapsedMilliseconds
+                $lastBytes = $done
+                $percent = if ($total -gt 0) { [int][Math]::Min(100,(100 * $done / $total)) } else { 0 }
+                Write-GSProgress -Stage 'Downloading' -Percent $percent -Indeterminate ($total -le 0) -BytesDownloaded $done -BytesTotal $total -SpeedBytesPerSecond ([int64]$speed) -Detail $Label
+            }
+        }
+        $file.Flush()
+        if ($total -gt 0 -and $done -lt $total) { throw ('Connection closed early: ' + $done + ' of ' + $total + ' bytes') }
+        Write-GSProgress -Stage 'Downloading' -Percent 100 -Indeterminate $false -BytesDownloaded $done -BytesTotal $(if ($total -gt 0) { $total } else { $done }) -SpeedBytesPerSecond ([int64]$speed) -Detail $Label
+        return [int64]$done
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $file) { $file.Dispose() }
+        if ($null -ne $response) { $response.Close() }
+    }
+}
+
 function Download-GSFileWithRetry {
+    # Streaming download with progress (bytes, total, speed) and resume.
+    # Field evidence: Invoke-WebRequest on Windows 10 dropped the connection
+    # ("unexpected error on a send") and restarted from zero on every attempt.
     param(
         [Parameter(Mandatory=$true)][string]$Uri,
         [Parameter(Mandatory=$true)][string]$Destination,
         [int]$MinimumBytes = 1024,
-        [int]$Attempts = 3
+        [int]$Attempts = 4,
+        [string]$Label = ''
     )
 
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    } catch {}
+        $protocols = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        try { $protocols = $protocols -bor [Net.SecurityProtocolType]3072 -bor [Net.SecurityProtocolType]12288 } catch {}
+        [Net.ServicePointManager]::SecurityProtocol = $protocols
+    } catch {
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+    }
 
+    if ([string]::IsNullOrWhiteSpace($Label)) { $Label = [IO.Path]::GetFileName($Destination) }
+    $partial = $Destination + '.partial'
+    Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
     $lastMessage = ''
 
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        try {
-            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-            Write-GSLog -Message ('Download attempt ' + $attempt + '/' + $Attempts + ': ' + $Uri) -Level 'INFO'
-            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 120 -ErrorAction Stop
-
-            $file = Get-Item -LiteralPath $Destination -ErrorAction Stop
-            if ($file.Length -lt $MinimumBytes) {
-                throw ('Downloaded file is unexpectedly small: ' + $file.Length + ' bytes')
+    try {
+        for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+            try {
+                Write-GSLog -Message ('Download attempt ' + $attempt + '/' + $Attempts + ': ' + $Uri) -Level 'INFO'
+                $bytes = Invoke-GSStreamDownload -Uri $Uri -PartialPath $partial -Label $Label
+                if ($bytes -lt $MinimumBytes) {
+                    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+                    throw ('Downloaded file is unexpectedly small: ' + $bytes + ' bytes')
+                }
+                Move-Item -LiteralPath $partial -Destination $Destination -Force
+                Write-GSLog -Message ('Downloaded ' + ('{0:N2}' -f ($bytes / 1MB)) + ' MB') -Level 'INFO'
+                return
+            } catch {
+                $lastMessage = $_.Exception.Message
+                $kept = if (Test-Path -LiteralPath $partial) { (Get-Item -LiteralPath $partial).Length } else { 0 }
+                Write-GSLog -Message ('Download failed (kept ' + $kept + ' bytes for resume): ' + $lastMessage) -Level 'WARN'
+                if ($attempt -lt $Attempts) {
+                    Write-GSProgress -Stage 'DownloadRetry' -Indeterminate $true -Detail ($Label + ' (' + ($attempt + 1) + '/' + $Attempts + ')')
+                    Start-Sleep -Seconds ([Math]::Min(8,$attempt * 2))
+                }
             }
-
-            Write-GSLog -Message ('Downloaded ' + ('{0:N2}' -f ($file.Length / 1MB)) + ' MB') -Level 'INFO'
-            return
-        } catch {
-            $lastMessage = $_.Exception.Message
-            Write-GSLog -Message ('Download failed: ' + $lastMessage) -Level 'WARN'
-            Start-Sleep -Seconds ([Math]::Min(6,$attempt * 2))
         }
+    } finally {
+        if (-not (Test-Path -LiteralPath $Destination)) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
     }
 
     throw (New-GSClassifiedException -Code 'NetworkFailure' -Message ('Download failed after retries: ' + $lastMessage))
@@ -402,7 +502,7 @@ function Install-GSWindowsAppRuntime18 {
     $installer = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-WindowsAppRuntime18-' + [Guid]::NewGuid().ToString('N') + '.exe')
 
     try {
-        Download-GSFileWithRetry -Uri $urls[$arch] -Destination $installer -MinimumBytes 1048576
+        Download-GSFileWithRetry -Uri $urls[$arch] -Destination $installer -MinimumBytes 1048576 -Label 'Windows App Runtime 1.8'
         Assert-GSMicrosoftSignedFile -Path $installer -Label 'Windows App Runtime 1.8 installer'
 
         $result = Invoke-GSNativeProcess -FileName $installer -Arguments @('--quiet') -TimeoutSeconds 600
@@ -428,7 +528,7 @@ function New-GSAppInstallerDependencyWorkspace {
     $extract = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-WinGetDependencies-' + [Guid]::NewGuid().ToString('N'))
 
     try {
-        Download-GSFileWithRetry -Uri $archiveUri -Destination $archive -MinimumBytes 10240
+        Download-GSFileWithRetry -Uri $archiveUri -Destination $archive -MinimumBytes 10240 -Label 'WinGet dependencies'
         New-Item -ItemType Directory -Force -Path $extract | Out-Null
         Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
 
@@ -727,12 +827,16 @@ function Repair-GSWinget {
     $beforeWinget = Get-GSWingetVersion
     $deployment = $null
 
-    # Repair only a missing package/executable. A healthy App Installer is not
-    # downloaded and redeployed merely because the user opened this action.
-    if (-not $beforePackage -or -not $beforeWinget) {
+    # Repair a missing or outdated package/executable. A healthy App Installer
+    # is not downloaded and redeployed merely because the user opened this action.
+    # WinGet older than the minimum (1.6 on fresh Windows 11) cannot open the
+    # Microsoft Store source (0x8a15005e), so it counts as broken.
+    $minimumWinget = [version]'1.11.0'
+    if (Get-Variable -Name GSMinimumWingetVersion -Scope Script -ErrorAction SilentlyContinue) { $minimumWinget = $script:GSMinimumWingetVersion }
+    if (-not $beforePackage -or -not $beforeWinget -or $beforeWinget -lt $minimumWinget) {
         $bundle = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-AppInstaller-' + [Guid]::NewGuid().ToString('N') + '.msixbundle')
         try {
-            Download-GSFileWithRetry -Uri 'https://aka.ms/getwinget' -Destination $bundle -MinimumBytes 1048576
+            Download-GSFileWithRetry -Uri 'https://aka.ms/getwinget' -Destination $bundle -MinimumBytes 1048576 -Label 'App Installer (WinGet)'
             Assert-GSMicrosoftSignedFile -Path $bundle -Label 'Microsoft Desktop App Installer'
             $deployment = Invoke-GSAppInstallerDeployment -BundlePath $bundle
             Clear-GSWingetCache
@@ -740,6 +844,7 @@ function Repair-GSWinget {
             Start-Sleep -Seconds 2
         } finally {
             Remove-Item -LiteralPath $bundle -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath ($bundle + '.partial') -Force -ErrorAction SilentlyContinue
         }
     }
 

@@ -38,6 +38,7 @@ $moduleFiles = @(
     'GarantStore.Winget.ps1',
     'GarantStore.State.ps1',
     'GarantStore.Deployment.ps1',
+    'GarantStore.Prepare.ps1',
     'GarantStore.Store.ps1',
     'GarantStore.Bundles.ps1',
     'GarantStore.Diagnostics.ps1'
@@ -193,6 +194,7 @@ try {
             $agreementConsent = if ($request.PSObject.Properties.Name -contains 'AgreementConsent') { [bool]$request.AgreementConsent } else { $false }
             $allowServiceChanges = if ($request.PSObject.Properties.Name -contains 'AllowServiceChanges') { [bool]$request.AllowServiceChanges } else { $false }
 
+            Assert-GSPreparedForInstall
             $installed = Invoke-GSPackageInstall `
                 -Id $id `
                 -Source $source `
@@ -223,6 +225,7 @@ try {
         'bundle' {
             $agreementConsent = if ($request.PSObject.Properties.Name -contains 'AgreementConsent') { [bool]$request.AgreementConsent } else { $false }
             $allowServiceChanges = if ($request.PSObject.Properties.Name -contains 'AllowServiceChanges') { [bool]$request.AllowServiceChanges } else { $false }
+            Assert-GSPreparedForInstall
             $bundle = Invoke-GSBundleInstall -Items @($request.Items) -AgreementConsent $agreementConsent -AllowServiceChanges $allowServiceChanges
             Clear-GSInventoryCache
             $bundleStatus = if ($bundle.Failed -eq 0) { 'BundleCompleted' } else { 'BundlePartial' }
@@ -241,6 +244,20 @@ try {
                 Clear-GSInventoryCache
                 $finalResult = New-GSResult -Success $true -Status 'InstalledVerified' -Message 'Local signed package installation was verified.' -Data $deploy
             }
+        }
+
+        'preparestate' {
+            $prepState = Get-GSPreparationState -SkipStoreProbe:([bool]($request.PSObject.Properties.Name -contains 'SkipStoreProbe' -and $request.SkipStoreProbe))
+            $finalResult = New-GSResult -Success $true -Status $(if ($prepState.Ready) { 'PreparationReady' } else { 'PreparationNeeded' }) -Message ('WinGet=' + $prepState.WingetStatus + ' ' + $prepState.WingetVersion + '; msstore=' + $prepState.StoreSource + '; missing frameworks=' + (@($prepState.MissingFrameworks) -join ',')) -Data $prepState
+        }
+
+        'prepare' {
+            $acceptTerms = if ($request.PSObject.Properties.Name -contains 'AgreementConsent') { [bool]$request.AgreementConsent } else { $false }
+            $prep = Invoke-GSSystemPreparation -AcceptStoreTerms $acceptTerms
+            Clear-GSCache -Scope All
+            foreach ($step in @($prep.Steps)) { Write-GSLog -Message ('Prepare step ' + $step.Id + ': ' + $step.Status + ' ' + $step.Detail) -Level 'INFO' }
+            $finalResult = New-GSResult -Success ([bool]$prep.Ready) -Status $(if ($prep.Ready) { 'PreparationCompleted' } else { 'PreparationIncomplete' }) -ErrorCode $(if ($prep.Ready) { '' } else { 'PreparationIncomplete' }) -Message ('Preparation finished. WinGet=' + $prep.After.WingetVersion) -Data $prep
+            if (-not $prep.Ready) { $exitCode = 1 }
         }
 
         'repairwinget' {

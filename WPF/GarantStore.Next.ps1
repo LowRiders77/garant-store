@@ -86,7 +86,7 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
   </Grid>
  </Border>
  <Grid Grid.Column="1" Margin="36,28,36,24">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <DockPanel Grid.Row="0" Margin="0,0,0,12">
    <Button x:Name="Stop" AutomationProperties.AutomationId="StopOperation" DockPanel.Dock="Right" Content="Остановить" Style="{StaticResource ButtonStyle}" IsEnabled="False" VerticalAlignment="Center"/>
    <StackPanel><TextBlock x:Name="Heading" Text="Приложения" FontSize="28" FontWeight="Medium"/><TextBlock Text="Найдите и установите нужную программу" Foreground="#ADB7AF" Margin="0,6,0,0" FontSize="13"/></StackPanel>
@@ -100,7 +100,10 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <Button x:Name="Search" AutomationProperties.AutomationId="SearchButton" Grid.Column="2" Content="Найти" Style="{StaticResource AccentButton}"/>
    </Grid>
   </Border>
-  <Grid Grid.Row="2">
+  <Border x:Name="PrepBanner" AutomationProperties.AutomationId="PrepareBanner" Grid.Row="2" Visibility="Collapsed" Background="#17271E" BorderBrush="#2F6B4A" BorderThickness="1" CornerRadius="12" Padding="14,10" Margin="0,0,0,12">
+   <DockPanel><Button x:Name="PrepareButton" AutomationProperties.AutomationId="PrepareSystem" DockPanel.Dock="Right" Content="Подготовить систему" Style="{StaticResource AccentButton}" VerticalAlignment="Center" Margin="12,0,0,0"/><StackPanel VerticalAlignment="Center"><TextBlock Text="Система не готова к установке программ" FontWeight="Medium" FontSize="13" Foreground="#70E2AA"/><TextBlock x:Name="PrepBannerText" Text="" FontSize="12" Foreground="#ADB7AF" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></DockPanel>
+  </Border>
+  <Grid Grid.Row="3">
    <Grid x:Name="CatalogView"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <DockPanel Grid.Row="0" Margin="0,0,0,12"><TextBlock Text="Подборки" FontSize="18" FontWeight="Medium"/></DockPanel>
     <WrapPanel x:Name="Categories" Grid.Row="1" Margin="0,0,0,8"/>
@@ -121,9 +124,9 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <TextBox x:Name="Log" AutomationProperties.AutomationId="OperationLog" Grid.Row="1" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto"/>
    </Grid>
   </Grid>
-  <Border Grid.Row="3" CornerRadius="12" Background="#1B211D" BorderBrush="#303832" BorderThickness="1" Padding="14" Margin="0,18,0,0">
+  <Border Grid.Row="4" CornerRadius="12" Background="#1B211D" BorderBrush="#303832" BorderThickness="1" Padding="14" Margin="0,18,0,0">
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="168"/></Grid.ColumnDefinitions>
-    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse Width="7" Height="7" Fill="#70E2AA" Margin="0,0,11,0"/><StackPanel><TextBlock x:Name="Status" AutomationProperties.AutomationId="OperationStatus" Text="Готово к работе" FontWeight="Medium" FontSize="12"/><TextBlock x:Name="Detail" AutomationProperties.AutomationId="OperationDetail" Text="Выберите приложение или воспользуйтесь поиском" FontSize="11" Foreground="#89938B" Margin="0,4,0,0"/></StackPanel></StackPanel>
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse x:Name="ActivityDot" Width="7" Height="7" Fill="#70E2AA" Margin="0,0,11,0"/><StackPanel><TextBlock x:Name="Status" AutomationProperties.AutomationId="OperationStatus" Text="Готово к работе" FontWeight="Medium" FontSize="12"/><TextBlock x:Name="Detail" AutomationProperties.AutomationId="OperationDetail" Text="Выберите приложение или воспользуйтесь поиском" FontSize="11" Foreground="#89938B" Margin="0,4,0,0"/></StackPanel></StackPanel>
     <ProgressBar x:Name="Progress" Grid.Column="1" Height="4" VerticalAlignment="Center" Foreground="#70E2AA" Background="#343C36" BorderThickness="0"/>
    </Grid>
   </Border>
@@ -142,7 +145,7 @@ $script:uiDispatcher.add_UnhandledException({param($sender,$e)
  $e.Handled=$true
  try{$Status.Text='Ошибка интерфейса';$Detail.Text='Подробности записаны в диагностический журнал.'}catch{}
 })
-foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress')) {
+foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress','PrepBanner','PrepBannerText','PrepareButton','ActivityDot')) {
  Set-Variable -Scope Script -Name $name -Value $win.FindName($name)
 }
 $iconPath=Join-Path $root 'Assets\GarantStoreMark.ico'
@@ -286,6 +289,166 @@ function Set-GSUiControlText([string]$Name,[string]$Value){
  $control=$win.FindName($Name)
  if($null -ne $control -and $null -ne $control.PSObject.Properties['Text']){$control.Text=$Value}
 }
+function Format-GSByteSize([double]$Bytes){
+ $c=[Globalization.CultureInfo]::GetCultureInfo('ru-RU')
+ if($Bytes -ge 1GB){return ($Bytes/1GB).ToString('0.00',$c)+' ГБ'}
+ if($Bytes -ge 1MB){return ($Bytes/1MB).ToString('0.0',$c)+' МБ'}
+ if($Bytes -ge 1KB){return ($Bytes/1KB).ToString('0',$c)+' КБ'}
+ return ([int64]$Bytes).ToString()+' Б'
+}
+function Format-GSEta([double]$Seconds){
+ if($Seconds -lt 1 -or $Seconds -gt 86400){return ''}
+ if($Seconds -lt 60){return 'осталось ~'+[int][Math]::Ceiling($Seconds)+' с'}
+ $m=[int][Math]::Floor($Seconds/60);$s=[int]($Seconds%60)
+ if($m -lt 60){return 'осталось ~'+$m+' мин'+$(if($s -ge 30 -and $m -lt 5){' '+$s+' с'}else{''})}
+ return 'осталось ~'+[int][Math]::Floor($m/60)+' ч '+($m%60)+' мин'
+}
+function Format-GSProgressText($Progress){
+ # Core reports technical stage names; the user sees Russian text and, while
+ # something downloads, size, speed and time left so the app never looks frozen.
+ $stage=[string](Get-GSUiObjectValue $Progress 'Stage' '')
+ $detail=[string](Get-GSUiObjectValue $Progress 'Detail' '')
+ $done=[double](Get-GSUiObjectValue $Progress 'BytesDownloaded' 0)
+ $total=[double](Get-GSUiObjectValue $Progress 'BytesTotal' 0)
+ $speed=[double](Get-GSUiObjectValue $Progress 'SpeedBytesPerSecond' 0)
+ $status=switch -Regex ($stage){
+  '^Starting$'{'Запуск...'}
+  '^(Searching|Search)$'{'Поиск...'}
+  '^CheckingState$'{'Проверяем установленные программы...'}
+  '^ResolvingPackage$'{'Ищем пакет...'}
+  '^(StoreHandshake|StoreExecution)$'{'Связь с Microsoft Store...'}
+  '^Authorizing$'{'Получаем лицензию Microsoft Store...'}
+  '^Services$'{'Запускаем службы Microsoft Store...'}
+  '^PreparingInstall$'{'Подготовка установки...'}
+  '^Downloading$'{'Загрузка'}
+  '^DownloadRetry$'{'Связь прервалась, продолжаем загрузку...'}
+  '^DownloadingDependencies$'{'Загрузка компонентов WinGet...'}
+  '^InstallingFramework$'{'Установка системного компонента...'}
+  '^InstallingAppInstaller$'{'Обновление WinGet (App Installer)...'}
+  '^PrepareWinget$'{'Подготовка системы: WinGet'}
+  '^PrepareFrameworks$'{'Подготовка системы: компоненты'}
+  '^PrepareSources$'{'Подготовка системы: источники'}
+  '^Installing$'{'Установка...'}
+  '^Verifying$'{'Проверка результата...'}
+  '^Completed$'{'Готово'}
+  '^Failed$'{'Ошибка'}
+  default{if($stage){$stage}else{'Выполняется...'}}
+ }
+ $detailText=switch -Regex ($detail){
+  '^(WinGetStoreManifest|StoreEntitlement|MicrosoftStoreBroker|MicrosoftStore|DeliveryOptimization|PreviewReady|StoreProcessCompleted)$'{''}
+  '^WinGetDownload$'{'Загрузка установщика'}
+  '^(WinGetInstaller|StoreDeployment)$'{'Установщик работает, это может занять несколько минут'}
+  default{$detail}
+ }
+ if($stage -eq 'Downloading' -and $done -gt 0){
+  $parts=@()
+  $parts+=if($total -gt 0){(Format-GSByteSize $done)+' из '+(Format-GSByteSize $total)}else{'Загружено '+(Format-GSByteSize $done)}
+  if($speed -gt 0){$parts+=(Format-GSByteSize $speed)+'/с'}
+  if($speed -gt 0 -and $total -gt $done){$eta=Format-GSEta (($total-$done)/$speed);if($eta){$parts+=$eta}}
+  $detailText=(@($(if($detailText){$detailText}),($parts -join ' · '))|Where-Object{$_}) -join ' · '
+ }
+ return [pscustomobject]@{Status=$status;Detail=$detailText}
+}
+function Set-GSProgressValue([double]$Value){
+ # Smooth bar: animate towards the new value instead of jumping.
+ $Progress.IsIndeterminate=$false
+ $animation=New-Object Windows.Media.Animation.DoubleAnimation
+ $animation.To=[Math]::Max(0,[Math]::Min(100,$Value))
+ $animation.Duration=[Windows.Duration]::new([TimeSpan]::FromMilliseconds(350))
+ $animation.EasingFunction=New-Object Windows.Media.Animation.QuadraticEase
+ $Progress.BeginAnimation([Windows.Controls.Primitives.RangeBase]::ValueProperty,$animation)
+}
+function Reset-GSProgressValue{
+ $Progress.BeginAnimation([Windows.Controls.Primitives.RangeBase]::ValueProperty,$null)
+ $Progress.Value=0
+}
+function Set-GSActivityPulse([bool]$Active){
+ # The status dot breathes while Core works: a visible sign of life even when
+ # WinGet reports nothing for a while.
+ if($null -eq $ActivityDot){return}
+ if($Active){
+  $pulse=New-Object Windows.Media.Animation.DoubleAnimation
+  $pulse.From=1.0;$pulse.To=0.25
+  $pulse.Duration=[Windows.Duration]::new([TimeSpan]::FromMilliseconds(700))
+  $pulse.AutoReverse=$true
+  $pulse.RepeatBehavior=[Windows.Media.Animation.RepeatBehavior]::Forever
+  $ActivityDot.BeginAnimation([Windows.UIElement]::OpacityProperty,$pulse)
+ }else{
+  $ActivityDot.BeginAnimation([Windows.UIElement]::OpacityProperty,$null)
+  $ActivityDot.Opacity=1.0
+ }
+}
+function Get-GSPrepareStepText($Step){
+ $name=switch([string]$Step.Id){'winget'{'WinGet'}'frameworks'{'Компоненты Windows (VCLibs, UI.Xaml, App Runtime)'}'sources'{'Источник Microsoft Store'}'services'{'Службы Microsoft Store'}default{[string]$Step.Id}}
+ $state=switch([string]$Step.Status){'Ok'{'в порядке'}'Done'{'исправлено'}'Failed'{'не удалось'}'Skipped'{'пропущено'}'Info'{$(if([string]$Step.Detail){'отключены: '+[string]$Step.Detail+' (будут временно включены при установке с вашего согласия)'}else{'в порядке'})}default{[string]$Step.Status}}
+ return ('• '+$name+': '+$state)
+}
+function Show-GSPreparationBanner($State){
+ if($null -eq $PrepBanner){return}
+ if($null -eq $State -or [bool](Get-GSUiObjectValue $State 'Ready' $true)){$PrepBanner.Visibility='Collapsed';return}
+ $winget=[string](Get-GSUiObjectValue $State 'WingetStatus' '')
+ $version=[string](Get-GSUiObjectValue $State 'WingetVersion' '')
+ $store=[string](Get-GSUiObjectValue $State 'StoreSource' '')
+ $text=switch($winget){
+  'Missing'{'На этом компьютере нет WinGet — без него программы не установятся.'}
+  'Outdated'{'WinGet устарел (версия '+$version+'): Microsoft Store отклоняет его, установка программ завершится ошибкой.'}
+  default{if($store -eq 'CertificateError'){'Источник Microsoft Store не принимает текущий WinGet.'}else{'Система не готова к установке программ.'}}
+ }
+ $PrepBannerText.Text=$text+' Garant Store обновит WinGet и нужные компоненты по порядку — это займёт несколько минут.'
+ $PrepBanner.Visibility='Visible'
+}
+function Start-GSPreparationCheck{
+ # Startup check in its own process: it must not block the window or occupy
+ # the operation slot the user needs for searching and installing.
+ try{
+  $id=[guid]::NewGuid().ToString('N');$dir=[IO.Path]::GetTempPath()
+  $request=Join-Path $dir ('gsnext-prep-'+$id+'-request.json')
+  $output=Join-Path $dir ('gsnext-prep-'+$id+'-output.log')
+  $result=Join-Path $dir ('gsnext-prep-'+$id+'-result.json')
+  $req=@{Action='preparestate';OperationId='PREP-'+$id;ResultFile=$result;AgreementConsent=$false;AcceptAgreements=$false}
+  [IO.File]::WriteAllText($request,(ConvertTo-Json -InputObject $req -Depth 4),[Text.UTF8Encoding]::new($false))
+  $p=New-Object Diagnostics.ProcessStartInfo
+  $p.FileName=Join-Path $PSHOME 'powershell.exe'
+  $p.Arguments='-NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $root 'GarantStore.Core.ps1')+'" -RequestFile "'+$request+'" -OutputFile "'+$output+'"'
+  $p.UseShellExecute=$false;$p.CreateNoWindow=$true
+  $process=[Diagnostics.Process]::Start($p)
+  if($null -eq $process){return}
+  $script:prepCheck=[pscustomobject]@{Process=$process;Files=@($request,$output,$result);Result=$result;Started=Get-Date}
+  $script:prepTimer.Start()
+ }catch{Write-GSUiFailure -Component 'Prepare.StartupCheck' -Exception $_.Exception}
+}
+function Complete-GSPreparationCheck{
+ $c=$script:prepCheck
+ if($null -eq $c){$script:prepTimer.Stop();return}
+ if(-not $c.Process.HasExited){
+  if(((Get-Date)-$c.Started).TotalSeconds -gt 120){try{Stop-GSOperationProcessTree $c.Process}catch{}}else{return}
+ }
+ $script:prepTimer.Stop()
+ try{
+  if([IO.File]::Exists($c.Result)){
+   $v=Get-Content $c.Result -Raw | ConvertFrom-Json
+   $script:prepState=Get-GSUiObjectValue $v 'Data' $null
+   Show-GSPreparationBanner $script:prepState
+   Add-GSRecommendedBundle $script:prepState
+  }
+ }catch{Write-GSUiFailure -Component 'Prepare.StartupCheckResult' -Exception $_.Exception}
+ try{$c.Process.Dispose()}catch{}
+ foreach($f in $c.Files){Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue}
+ $script:prepCheck=$null
+}
+function Start-GSSystemPreparation($ThenRequest=$null){
+ if($null -ne $script:op){return}
+ $message='Garant Store подготовит систему к установке программ, строго по порядку:'+"`n`n"+
+  '1. Обновит WinGet (App Installer) с серверов Microsoft.'+"`n"+
+  '2. Установит недостающие компоненты: VCLibs, UI.Xaml, Windows App Runtime (без них приложения Store, например WhatsApp, могут не запускаться).'+"`n"+
+  '3. Обновит источники и проверит Microsoft Store.'+"`n`n"+
+  'Всё скачивается только с серверов Microsoft, подпись каждого пакета проверяется. Займёт 2–10 минут.'+"`n"+
+  'Нажимая «Да», вы принимаете условия источника Microsoft Store (https://aka.ms/microsoft-store-terms-of-transaction).'+"`n`n"+'Начать?'
+ if([Windows.MessageBox]::Show($win,$message,'Подготовка системы',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question) -ne [Windows.MessageBoxResult]::Yes){return}
+ $script:afterPrepare=$ThenRequest
+ if($null -ne $PrepBanner){$PrepBanner.Visibility='Collapsed'}
+ try{Run-Core @{Action='prepare';AgreementConsent=$true}}catch{$Status.Text=$_.Exception.Message}
+}
 function Run-Core([hashtable]$req){
  if($null -ne $script:op){return}
  Remove-Temp
@@ -313,7 +476,8 @@ function Run-Core([hashtable]$req){
  $Log.Clear()
  $script:op=[pscustomobject]@{Id=$req.OperationId;Process=$process;Stopped=$false;BundlePosition='';BundleItem='';LogOffset=[long]0;LogDecoder=(New-Object Text.UTF8Encoding($false)).GetDecoder();Action=$req.Action;Out=$outputFile;Result=$resultFile;Preview=$previewFile;Progress=$progressFile;SeenPreview=$false;Query=$opQuery;Source=$opSource;AgreementConsent=[bool]$req.AgreementConsent;Request=@{}+$req}
  $Search.IsEnabled=$false;$Install.IsEnabled=$false;$BundleInstall.IsEnabled=$false;$Stop.IsEnabled=$true
- $Status.Text='Выполняется: '+$req.Action;$Detail.Text='Подготовка...';$Progress.IsIndeterminate=$true
+ $Status.Text=switch([string]$req.Action){'search'{'Поиск...'}'install'{'Установка...'}'bundle'{'Установка набора...'}'bundlestate'{'Проверка набора...'}'prepare'{'Подготовка системы...'}'doctor'{'Диагностика...'}'repairwinget'{'Восстановление WinGet...'}'diagnostics'{'Сбор диагностики...'}default{'Выполняется...'}}
+ $Detail.Text='Подготовка...';Reset-GSProgressValue;$Progress.IsIndeterminate=$true;Set-GSActivityPulse $true
  $tick.Start()
 }
 function Stop-GSOperationProcessTree($Process){
@@ -411,6 +575,40 @@ function Initialize-GSBundleCards {
   [void]$BundleCards.Children.Add($card)
  }
 }
+function New-GSRecommendedBundle($State){
+ # Builds the «Рекомендуем для этого ПК» set from the startup check: what this
+ # Windows lacks for typical programs plus hardware hints. Installed items are
+ # marked by the regular bundle state check, so the list never pushes duplicates.
+ if($null -eq $State){return $null}
+ $hardware=Get-GSUiObjectValue $State 'Hardware' $null
+ $gpu=[string](Get-GSUiObjectValue $hardware 'DiscreteGpu' '')
+ $is64=[bool](Get-GSUiObjectValue $hardware 'Is64Bit' $true)
+ $isLaptop=[bool](Get-GSUiObjectValue $hardware 'IsLaptop' $false)
+ $missing=@(Get-GSUiObjectValue $State 'MissingFrameworks' @())
+ $items=New-Object System.Collections.ArrayList
+ $add={param($entry)[void]$items.Add([pscustomobject]$entry)}
+ if($is64){& $add @{Name='Visual C++ 2015–2022 (x64)';Id='Microsoft.VCRedist.2015+.x64';Source='winget';Default=$true;Reason='Нужен большинству программ и игр — без него «не найден VCRUNTIME140.dll»'}}
+ & $add @{Name='Visual C++ 2015–2022 (x86)';Id='Microsoft.VCRedist.2015+.x86';Source='winget';Default=$true;Reason='Для 32-битных программ, которые всё ещё встречаются часто'}
+ & $add @{Name='.NET Desktop Runtime 8';Id='Microsoft.DotNet.DesktopRuntime.8';Source='winget';Default=$true;Reason='Нужен многим программам для Windows (утилиты, лаунчеры, бухгалтерия)'}
+ & $add @{Name='WebView2 Runtime';Id='Microsoft.EdgeWebView2Runtime';Source='winget';Default=$true;Reason='Встроенный браузер для WhatsApp, Teams, Office и других приложений'}
+ if($missing -contains 'WindowsAppRuntime'){& $add @{Name='Windows App Runtime 1.8';Id='Microsoft.WindowsAppRuntime.1.8';Source='winget';Default=$true;Reason='Не установлен: без него новые приложения Store (например, WhatsApp) могут не запускаться'}}
+ if($gpu){& $add @{Name='DirectX (End-User Runtime)';Id='Microsoft.DirectX';Source='winget';Default=$true;Reason='Найдена видеокарта '+$gpu+': старые игры требуют компоненты DirectX 9–11'}}
+ & $add @{Name='CrystalDiskInfo';Id='CrystalDewWorld.CrystalDiskInfo';Source='winget';Default=$isLaptop;Reason=$(if($isLaptop){'Покажет здоровье SSD ноутбука и предупредит заранее'}else{'Покажет здоровье дисков и предупредит заранее'})}
+ & $add @{Name='7-Zip';Id='7zip.7zip';Source='winget';Default=$true;Reason='Открывает ZIP, RAR, 7z — встроенного архиватора Windows не хватает'}
+ $notes=@()
+ if($gpu){$notes+='Драйвер видеокарты '+$gpu+' ставьте в разделе «Драйверы».'}
+ if(-not [bool](Get-GSUiObjectValue $State 'Ready' $true)){$notes+='Сначала нажмите «Подготовить систему».'}
+ $description='Подобрано по этому компьютеру. Уже установленное будет отмечено автоматически.'+$(if($notes.Count){' '+($notes -join ' ')}else{''})
+ return [pscustomobject]@{Id='recommended';Title='Рекомендуем для этого ПК';Description=$description;Items=@($items.ToArray())}
+}
+function Add-GSRecommendedBundle($State){
+ try{
+  $recommended=New-GSRecommendedBundle $State
+  if($null -eq $recommended){return}
+  $script:bundles=@(@($recommended)+@($script:bundles|Where-Object{[string]$_.Id -ne 'recommended'}))
+  if($BundleCards.Visibility -eq 'Visible'){Initialize-GSBundleCards}else{Initialize-GSBundleCards;$BundleCards.Visibility='Collapsed'}
+ }catch{Write-GSUiFailure -Component 'Bundles.Recommended' -Exception $_.Exception}
+}
 function Open-GSBundle($Bundle,[switch]$SkipStateCheck){
  $script:currentBundle=$Bundle
  $BundleCards.Visibility='Collapsed';$BundleItems.Visibility='Visible'
@@ -424,6 +622,8 @@ function Open-GSBundle($Bundle,[switch]$SkipStateCheck){
   [Windows.Automation.AutomationProperties]::SetAutomationId($box,'BundleItem-'+[string]$item.Id)
   $panel=New-Object Windows.Controls.StackPanel;$panel.Margin=New-Object Windows.Thickness(8,0,0,0)
   [void]$panel.Children.Add((New-GSBundleText ([string]$item.Name) 14 '#EEF2EE' 'Medium'))
+  $reason=[string](Get-GSUiObjectValue $item 'Reason' '')
+  if($reason){$reasonText=New-GSBundleText $reason 11 '#ADB7AF';$reasonText.TextWrapping='Wrap';$reasonText.Margin=New-Object Windows.Thickness(0,2,0,2);[void]$panel.Children.Add($reasonText)}
   $state=New-GSBundleText ($(if($SkipStateCheck){[string]$item.Id}else{'Проверяем статус...'})) 11 '#89938B'
   [void]$panel.Children.Add($state)
   $box.Content=$panel
@@ -490,11 +690,18 @@ function Show-GSBundleOutcome($Data){
  $Status.Text=if([int]$Data.Failed -eq 0){'Набор установлен'}else{'Набор установлен частично'}
  $Detail.Text='Установлено: '+[int]$Data.Installed+' · уже было: '+[int]$Data.AlreadyPresent+' · ошибок: '+[int]$Data.Failed
 }
-function Format-GSBundleProgress($Progress){
+function Format-GSBundleProgress($Progress,$Text=$null){
  # Core reports "Bundle i/N" with the program name; inner pipeline stages keep
  # the position visible instead of replacing it.
  if([string]$Progress.Stage -match '^Bundle (\d+)/(\d+)$'){$script:op.BundlePosition='Набор: программа '+$Matches[1]+' из '+$Matches[2];$script:op.BundleItem=[string]$Progress.Detail}
- if($script:op.BundlePosition){$Status.Text=$script:op.BundlePosition;$Detail.Text=$script:op.BundleItem}
+ if($script:op.BundlePosition){
+  $Status.Text=$script:op.BundlePosition
+  $Detail.Text=$script:op.BundleItem
+  if($null -ne $Text -and [string]$Progress.Stage -notmatch '^Bundle '){
+   $phase=([string]$Text.Status).TrimEnd('.')
+   $Detail.Text=(@($script:op.BundleItem,$phase,[string]$Text.Detail)|Where-Object{$_}) -join ' · '
+  }
+ }
 }
 function Complete-GSBundleOperation($Operation,$Result){
  if($Operation.Action -eq 'bundlestate'){
@@ -544,14 +751,18 @@ $tick.Add_Tick({
  $o=$script:op
  $agreementRetry=$false
  $serviceConsentRetry=$false
+ $prepareRetry=$false
+ $prepareFollowUp=$null
  try{
   Read-GSOperationLogDelta $o
   if([IO.File]::Exists($o.Progress)){
    $p=Get-Content $o.Progress -Raw | ConvertFrom-Json
-   if($null -ne $p.Stage){$Status.Text=[string]$p.Stage}
-   if($null -ne $p.Detail){$Detail.Text=[string]$p.Detail}
-   if($null -ne $p.Percent -and [double]$p.Percent -ge 0 -and [double]$p.Percent -le 100){$Progress.IsIndeterminate=$false;$Progress.Value=[double]$p.Percent}
-   if($o.Action -eq 'bundle'){Format-GSBundleProgress $p}
+   $progressText=Format-GSProgressText $p
+   $Status.Text=$progressText.Status;$Detail.Text=$progressText.Detail
+   $percentValue=Get-GSUiObjectValue $p 'Percent' $null
+   if([bool](Get-GSUiObjectValue $p 'Indeterminate' $false) -or $null -eq $percentValue){$Progress.IsIndeterminate=$true}
+   elseif([double]$percentValue -ge 0 -and [double]$percentValue -le 100){Set-GSProgressValue ([double]$percentValue)}
+   if($o.Action -eq 'bundle'){Format-GSBundleProgress $p $progressText}
   }
   if($o.Action -eq 'search' -and -not $o.SeenPreview -and [IO.File]::Exists($o.Preview)){
    $v=Get-Content $o.Preview -Raw | ConvertFrom-Json
@@ -570,10 +781,11 @@ $tick.Add_Tick({
    $resultMessage=[string](Get-GSUiObjectValue $v 'Message' 'Операция завершилась без подробного сообщения.')
    if($o.Action -eq 'search' -and -not $o.AgreementConsent -and $resultErrorCode -eq 'SourceAgreementsRequired'){$agreementRetry=$true;$Status.Text='Требуется согласие';$Detail.Text='WinGet запросил согласие с условиями источника перед продолжением поиска.'}
    if($o.Action -eq 'install' -and $resultErrorCode -eq 'StoreServiceConsentRequired'){$serviceConsentRetry=$true}
+   if($o.Action -in @('install','bundle') -and ($resultStatus -eq 'NeedsPreparation' -or $resultErrorCode -eq 'NeedsPreparation')){$prepareRetry=$true}
    $resultRows=Get-GSUiObjectValue $v 'Results' $null
    if($o.Action -eq 'search' -and $null -ne $resultRows){Load-Results $resultRows}
    $resultSuccess=[bool](Get-GSUiObjectValue $v 'Success' $false)
-   $Status.Text=if($resultSuccess){switch($resultStatus){'AlreadyCurrent'{'Актуально'}'StoreUpdateUnknown'{'Проверка не завершена'}'UpdateVerified'{'Обновлено'}'InstalledVerified'{'Установлено'}'RepairVerified'{'Поиск проверен'}'RepairPartial'{'Частично проверено'}default{'Готово'}}}else{'Ошибка'}
+   $Status.Text=if($resultSuccess){switch($resultStatus){'AlreadyCurrent'{'Актуально'}'StoreUpdateUnknown'{'Проверка не завершена'}'UpdateVerified'{'Обновлено'}'InstalledVerified'{'Установлено'}'RepairVerified'{'Поиск проверен'}'RepairPartial'{'Частично проверено'}'PreparationCompleted'{'Система подготовлена'}'PreparationReady'{'Система готова'}default{'Готово'}}}elseif($resultStatus -eq 'NeedsPreparation'){'Нужна подготовка системы'}elseif($resultStatus -eq 'PreparationIncomplete'){'Подготовка не завершена'}else{'Ошибка'}
    $Detail.Text=switch($resultStatus){
     'AlreadyCurrent'{'Приложение уже установлено и обновление не требуется.'}
     'StoreUpdateUnknown'{'Приложение установлено, но наличие обновления подтвердить не удалось. Изменений не внесено.'}
@@ -583,12 +795,29 @@ $tick.Add_Tick({
     default{$resultMessage}
    }
    if($o.Action -in @('bundlestate','bundle')){Complete-GSBundleOperation $o $v}
+   if($o.Action -eq 'prepare'){
+    $prepData=Get-GSUiObjectValue $v 'Data' $null
+    $prepAfter=Get-GSUiObjectValue $prepData 'After' $null
+    $script:prepState=$prepAfter
+    $stepLines=@(@(Get-GSUiObjectValue $prepData 'Steps' @())|Where-Object{$_}|ForEach-Object{Get-GSPrepareStepText $_})
+    if($resultSuccess){
+     $Detail.Text='WinGet '+[string](Get-GSUiObjectValue $prepAfter 'WingetVersion' '')+' готов. Можно устанавливать программы.'
+     if($null -ne $PrepBanner){$PrepBanner.Visibility='Collapsed'}
+     if($null -ne $script:afterPrepare){$prepareFollowUp=$script:afterPrepare;$Detail.Text='Система подготовлена. Повторяем установку...'}
+    }else{
+     $Detail.Text='Часть шагов не выполнена. Подробности — в журнале операций.'
+     Show-GSPreparationBanner $prepAfter
+     $prepareFollowUp='report'
+     $script:prepReport=('Подготовка системы завершилась не полностью:'+"`n`n"+($stepLines -join "`n")+"`n`n"+'Проверьте подключение к интернету и повторите. Если ошибка повторяется, нажмите «Диагностика» и пришлите архив мастеру.')
+    }
+    $script:afterPrepare=$null
+   }
   }elseif([bool]$o.Stopped){
    $Status.Text='Остановлено'
    $Detail.Text=if($o.Action -in @('install','bundle')){'Операция прервана. Если установщик уже вносил изменения, проверьте приложение или повторите установку.'}else{'Операция прервана пользователем.'}
   }else{$Status.Text='Операция завершилась без результата';$Detail.Text='Откройте журнал'}
  }catch{$Status.Text='Ошибка обработки результата';$Detail.Text=$_.Exception.Message}
- $o.Process.Dispose();$script:op=$null;$Progress.IsIndeterminate=$false
+ $o.Process.Dispose();$script:op=$null;$Progress.IsIndeterminate=$false;Set-GSActivityPulse $false
  $Search.IsEnabled=$true;$Stop.IsEnabled=$false
  $Install.IsEnabled=($null -ne $Results.SelectedItem)
  Update-GSBundleSummary
@@ -617,6 +846,24 @@ $tick.Add_Tick({
    }
   }.GetNewClosure()
   [void]$win.Dispatcher.BeginInvoke([Action]$retryAction,[Windows.Threading.DispatcherPriority]::Background)
+ }
+ if($prepareRetry){
+  $retryRequest=@{}+$o.Request
+  $startPreparation=${function:Start-GSSystemPreparation}
+  $uiFailure=${function:Write-GSUiFailure}
+  $prepareAction={try{& $startPreparation $retryRequest}catch{& $uiFailure -Component 'Prepare.InstallRetry' -Exception $_.Exception -OperationId $o.Id}}.GetNewClosure()
+  [void]$win.Dispatcher.BeginInvoke([Action]$prepareAction,[Windows.Threading.DispatcherPriority]::Background)
+ }
+ if($prepareFollowUp -is [hashtable]){
+  $rerunRequest=$prepareFollowUp
+  $runCore=${function:Run-Core}
+  $uiFailure=${function:Write-GSUiFailure}
+  $rerunAction={try{& $runCore $rerunRequest}catch{& $uiFailure -Component 'Prepare.Rerun' -Exception $_.Exception -OperationId $o.Id}}.GetNewClosure()
+  [void]$win.Dispatcher.BeginInvoke([Action]$rerunAction,[Windows.Threading.DispatcherPriority]::Background)
+ }elseif($prepareFollowUp -eq 'report'){
+  $report=$script:prepReport
+  $reportAction={[void][Windows.MessageBox]::Show($win,$report,'Подготовка системы',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Warning)}.GetNewClosure()
+  [void]$win.Dispatcher.BeginInvoke([Action]$reportAction,[Windows.Threading.DispatcherPriority]::Background)
  }
  if($serviceConsentRetry){
   $retryRequest=@{}+$o.Request
@@ -686,7 +933,13 @@ $Stop.Add_Click({
  $o.Stopped=$true;$Stop.IsEnabled=$false;$Status.Text='Остановка...'
  Stop-GSOperationProcessTree $o.Process
 })
-$win.Add_Closed({if($null -ne $script:op){Stop-GSOperationProcessTree $script:op.Process};Remove-Temp})
+$PrepareButton.Add_Click({Start-GSSystemPreparation})
+$script:prepCheck=$null;$script:prepState=$null;$script:afterPrepare=$null;$script:prepReport=''
+$script:prepTimer=New-Object Windows.Threading.DispatcherTimer
+$script:prepTimer.Interval=[TimeSpan]::FromMilliseconds(1000)
+$script:prepTimer.Add_Tick({try{Complete-GSPreparationCheck}catch{$script:prepTimer.Stop();Write-GSUiFailure -Component 'Prepare.StartupCheckTick' -Exception $_.Exception}})
+$win.Add_ContentRendered({if($env:GS_WPF_SMOKE -ne '1' -and $null -eq $script:prepCheck -and $null -eq $script:prepState){Start-GSPreparationCheck}})
+$win.Add_Closed({if($null -ne $script:op){Stop-GSOperationProcessTree $script:op.Process};if($null -ne $script:prepCheck){try{Stop-GSOperationProcessTree $script:prepCheck.Process}catch{}};Remove-Temp})
 Category 'Популярные';Page 'catalog'
 if($env:GS_WPF_SMOKE -eq '1'){
  $smoke=New-Object Windows.Threading.DispatcherTimer
