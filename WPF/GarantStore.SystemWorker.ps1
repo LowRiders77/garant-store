@@ -20,7 +20,7 @@ try {
  }
  $profile|Add-Member -NotePropertyName history -NotePropertyValue ($history)
  # Plain-language first page: model, CPU, GPU, RAM, storage, panel, battery.
- try{$profile|Add-Member -NotePropertyName summary -NotePropertyValue (New-GSSystemSummary (Get-GSSummaryRaw))}catch{$profile|Add-Member -NotePropertyName summaryError -NotePropertyValue $_.Exception.Message}
+ try{$profile|Add-Member -NotePropertyName summary -NotePropertyValue (New-GSSystemSummary (Get-GSSummaryRaw))}catch{$profile|Add-Member -NotePropertyName summaryError -NotePropertyValue ($_.Exception.Message+' ['+[IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName)+':'+$_.InvocationInfo.ScriptLineNumber+']')}
  $profile|Add-Member -NotePropertyName collectionMs -NotePropertyValue ($watch.ElapsedMilliseconds)
  $json=$profile|ConvertTo-Json -Depth 9
  [IO.File]::WriteAllText($OutputPath,$json,[Text.UTF8Encoding]::new($false))
