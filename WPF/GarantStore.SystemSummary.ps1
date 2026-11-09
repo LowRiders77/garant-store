@@ -220,6 +220,51 @@ function Format-GSBattery($Battery){
  return ($parts -join ', ')
 }
 
+function Format-GSBoardName([string]$Manufacturer,[string]$Product){
+ # "Micro-Star International Co., Ltd." + "B550M PRO-VDH (MS-7C95)" -> "MSI B550M PRO-VDH (MS-7C95)"
+ $product=ConvertTo-GSCleanText $Product
+ if(Test-GSPlaceholderText $product){return 'Не определено'}
+ $vendor=Format-GSVendorName $Manufacturer
+ if(-not $vendor){$vendor=ConvertTo-GSCleanText $Manufacturer;if(Test-GSPlaceholderText $vendor){$vendor=''}}
+ if($vendor -and $product -notmatch ('^(?i)'+[regex]::Escape($vendor))){return ($vendor+' '+$product)}
+ return $product
+}
+
+function Get-GSBatteryHealth($Battery){
+ if($null -eq $Battery -or -not [bool]$Battery.Present){return -1}
+ $design=[double]$Battery.DesignCapacity;$full=[double]$Battery.FullChargeCapacity
+ if($design -le 0 -or $full -le 0){return -1}
+ return [int][Math]::Min(100,[Math]::Round($full*100/$design))
+}
+
+function Format-GSPower($Battery){
+ # Laptop: capacity in mAh (Windows reports mWh; mAh needs the design voltage),
+ # health and charge cycles. Desktop: Windows has no data about the PSU.
+ if($null -eq $Battery -or -not [bool]$Battery.Present){return 'Не определяется программно · модель и мощность — на наклейке блока питания'}
+ $design=[double]$Battery.DesignCapacity;$full=[double]$Battery.FullChargeCapacity
+ $voltage=0.0;if($Battery.PSObject.Properties['DesignVoltage']){$voltage=[double]$Battery.DesignVoltage}
+ $inv=[Globalization.CultureInfo]::InvariantCulture
+ $n={param([double]$v)$v.ToString('#,0',$inv).Replace(',',' ')}
+ $parts=@()
+ if($design -gt 0 -and $full -gt 0){
+  if($voltage -ge 3000 -and $voltage -le 30000){
+   $parts+=((& $n ([Math]::Round($full*1000/$voltage)))+' из '+(& $n ([Math]::Round($design*1000/$voltage)))+' mAh')
+  }else{
+   $parts+=(($full/1000).ToString('0.#',$inv)+' из '+($design/1000).ToString('0.#',$inv)+' Вт·ч')
+  }
+  $health=Get-GSBatteryHealth $Battery
+  $verdict=if($health -ge 85){'хорошее'}elseif($health -ge 70){'нормальное'}elseif($health -ge 50){'заметный износ'}else{'требует замены'}
+  $parts+=('состояние '+[string]$health+'% ('+$verdict+')')
+ }else{$parts+='ёмкость не определена'}
+ if([int]$Battery.CycleCount -gt 0){$parts+=('циклов заряда: '+[string]$Battery.CycleCount)}
+ return ($parts -join ' · ')
+}
+
+function Invoke-GSSummaryPart([scriptblock]$Block){
+ # One broken source must not empty the whole first page.
+ try{$value=& $Block;if($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)){return 'Не определено'};return $value}catch{return 'Не определено'}
+}
+
 function New-GSSystemSummary($Raw){
  # Builds the ordered first-page summary from Get-GSSummaryRaw output.
  $kind=if([bool]$Raw.Battery.Present -or [int]$Raw.PcSystemType -eq 2){'Ноутбук'}else{'Компьютер'}
@@ -227,12 +272,15 @@ function New-GSSystemSummary($Raw){
  return [pscustomobject][ordered]@{
   Kind=$kind
   Model=$model
-  Processor=Format-GSCpuName ([string]$Raw.CpuName) ([int]$Raw.Cores) ([int]$Raw.Threads)
-  Graphics=Format-GSGpuList @($Raw.Gpus)
-  Memory=Format-GSMemory @($Raw.MemoryModules)
-  Storage=Format-GSStorage @($Raw.Disks)
-  Display=Format-GSDisplay @($Raw.Panels)
-  Battery=Format-GSBattery $Raw.Battery
+  Processor=Invoke-GSSummaryPart {Format-GSCpuName ([string]$Raw.CpuName) ([int]$Raw.Cores) ([int]$Raw.Threads)}
+  Graphics=Invoke-GSSummaryPart {Format-GSGpuList @($Raw.Gpus)}
+  Motherboard=Invoke-GSSummaryPart {if($Raw.PSObject.Properties['BoardProduct']){Format-GSBoardName ([string]$Raw.BoardManufacturer) ([string]$Raw.BoardProduct)}else{''}}
+  Memory=Invoke-GSSummaryPart {Format-GSMemory @($Raw.MemoryModules)}
+  Storage=Invoke-GSSummaryPart {Format-GSStorage @($Raw.Disks)}
+  Display=Invoke-GSSummaryPart {Format-GSDisplay @($Raw.Panels)}
+  Battery=Invoke-GSSummaryPart {Format-GSBattery $Raw.Battery}
+  Power=Invoke-GSSummaryPart {Format-GSPower $Raw.Battery}
+  BatteryHealth=$(try{Get-GSBatteryHealth $Raw.Battery}catch{-1})
  }
 }
 
@@ -273,8 +321,9 @@ function Get-GSSummaryRaw {
   }
  }catch{}
  foreach($adapter in @(Get-GSCimSafe Win32_VideoController)){
+  if($null -eq $adapter){continue}
   $name=[string]$adapter.Name
-  $memory=if($registryMemory.ContainsKey($name)){$registryMemory[$name]}else{[double]$adapter.AdapterRAM}
+  $memory=if($registryMemory.ContainsKey($name)){$registryMemory[$name]}else{try{[double]$adapter.AdapterRAM}catch{0}}
   $gpus.Add([pscustomobject]@{Name=$name;MemoryBytes=$memory})
  }
 
@@ -286,11 +335,14 @@ function Get-GSSummaryRaw {
 
  $panels=New-Object System.Collections.Generic.List[object]
  $connections=@{}
- foreach($connection in @(Get-GSCimSafe WmiMonitorConnectionParams 'root/wmi')){$connections[[string]$connection.InstanceName]=[uint32]$connection.VideoOutputTechnology}
+ foreach($connection in @(Get-GSCimSafe WmiMonitorConnectionParams 'root/wmi')){try{$connections[[string]$connection.InstanceName]=[int64]$connection.VideoOutputTechnology}catch{}}
  foreach($monitor in @(Get-GSCimSafe WmiMonitorID 'root/wmi' 'Active=TRUE')){
+  try{
   $instance=[string]$monitor.InstanceName
-  $technology=if($connections.ContainsKey($instance)){[uint32]$connections[$instance]}else{[uint32]0xFFFFFFFF}
-  $internal=($technology -in @([uint32]6,[uint32]11,[uint32]13,[uint32]0x80000000))
+  # int64 on purpose: in Windows PowerShell 0x80000000 is a negative int32 and
+  # [uint32]0x80000000 throws - that broke the whole summary on every PC.
+  $technology=if($connections.ContainsKey($instance)){[int64]$connections[$instance]}else{[int64]-1}
+  $internal=($technology -in @([int64]6,[int64]11,[int64]13,[int64]2147483648))
   $edid=$null
   try{
    $path='HKLM:\SYSTEM\CurrentControlSet\Enum\'+($instance -replace '_\d+$','')+'\Device Parameters'
@@ -302,12 +354,14 @@ function Get-GSSummaryRaw {
   }
   $parsed|Add-Member -NotePropertyName Internal -NotePropertyValue $internal -Force
   $panels.Add($parsed)
+  }catch{}
  }
 
  $battery=[pscustomobject]@{Present=$false;DesignCapacity=0;FullChargeCapacity=0;CycleCount=0;ChargePercent=-1}
  $wmiBattery=@(Get-GSCimSafe Win32_Battery)|Select-Object -First 1
  if($wmiBattery){
   $battery.Present=$true;$battery.ChargePercent=[int]$wmiBattery.EstimatedChargeRemaining
+  try{$battery|Add-Member -NotePropertyName DesignVoltage -NotePropertyValue ([double]$wmiBattery.DesignVoltage) -Force}catch{}
   $report=Join-Path ([IO.Path]::GetTempPath()) ('gs-battery-'+[guid]::NewGuid().ToString('N')+'.xml')
   try{
    $null=& (Join-Path $env:WINDIR 'System32\powercfg.exe') /batteryreport /xml /output $report 2>&1
@@ -334,6 +388,8 @@ function Get-GSSummaryRaw {
   Manufacturer=[string]$(if($computer){$computer.Manufacturer}else{''})
   Model=[string]$(if($computer){$computer.Model}else{''})
   Version=[string]$(if($product){$product.Version}else{''})
+  BoardManufacturer=[string]$(if($board){$board.Manufacturer}else{''})
+  BoardProduct=[string]$(if($board){$board.Product}else{''})
   Board=[string]$(if($board){(@($board.Manufacturer,$board.Product)|Where-Object{$_ -and -not (Test-GSPlaceholderText ([string]$_))}) -join ' '}else{''})
   ComputerName=[Environment]::MachineName
   PcSystemType=[int]$(if($computer){$computer.PCSystemType}else{0})

@@ -79,4 +79,56 @@ Assert-Equal $d.Display 'Монитор: 27.0" 2560×1440 165 Гц, LG LG ULTRAG
 Assert-Equal $d.Battery 'Нет (настольный ПК или аккумулятор не обнаружен)' 'Desktop battery'
 Assert-Equal (ConvertTo-GSSafeFileName 'ASUS Vivobook Go: E1504FA/2') 'ASUS Vivobook Go E1504FA 2' 'Safe file name'
 
+# New first-page parts: motherboard and power.
+Assert-Equal (Format-GSBoardName 'Micro-Star International Co., Ltd.' 'B550M PRO-VDH (MS-7C95)') 'MSI B550M PRO-VDH (MS-7C95)' 'Board name'
+Assert-Equal (Format-GSBoardName 'ASUSTeK COMPUTER INC.' 'ASUS TUF GAMING B550-PLUS') 'ASUS TUF GAMING B550-PLUS' 'Board name without duplicate vendor'
+Assert-Equal (Format-GSBoardName 'Default string' 'Default string') 'Не определено' 'Placeholder board'
+Assert-Equal (Format-GSPower ([pscustomobject]@{Present=$true;DesignCapacity=42000;FullChargeCapacity=38640;CycleCount=12;ChargePercent=80;DesignVoltage=11550})) '3 345 из 3 636 mAh · состояние 92% (хорошее) · циклов заряда: 12' 'Battery in mAh'
+Assert-Equal (Format-GSPower ([pscustomobject]@{Present=$true;DesignCapacity=42000;FullChargeCapacity=38640;CycleCount=0;ChargePercent=80})) '38.6 из 42 Вт·ч · состояние 92% (хорошее)' 'Battery without voltage'
+if((Format-GSPower $desktop.Battery) -notmatch 'блока питания'){throw 'Desktop PSU text missing'}
+Assert-Equal $d.BatteryHealth -1 'Desktop has no battery health'
+
+# Collector on mocked Windows sources: the MSI B550M / RTX 5060 desktop from the
+# field report. This path broke on every PC with a monitor ([uint32]0x80000000).
+function Get-CimInstance {
+ [CmdletBinding()]param([string]$ClassName,[string]$Namespace,[int]$OperationTimeoutSec,[string]$Filter)
+ switch($ClassName){
+  'Win32_ComputerSystem'{[pscustomobject]@{Manufacturer='Micro-Star International Co., Ltd.';Model='MS-7C95';PCSystemType=1}}
+  'Win32_ComputerSystemProduct'{[pscustomobject]@{Version='1.0'}}
+  'Win32_BaseBoard'{[pscustomobject]@{Manufacturer='Micro-Star International Co., Ltd.';Product='B550M PRO-VDH (MS-7C95)'}}
+  'Win32_Processor'{[pscustomobject]@{Name='AMD Ryzen 5 5600X 6-Core Processor             ';NumberOfCores=6;NumberOfLogicalProcessors=12}}
+  'Win32_VideoController'{[pscustomobject]@{Name='NVIDIA GeForce RTX 5060';AdapterRAM=4293918720}}
+  'Win32_PhysicalMemory'{1..2|ForEach-Object{[pscustomobject]@{Capacity=8589934592;SMBIOSMemoryType=26;ConfiguredClockSpeed=3200;Speed=3200;Manufacturer='Unknown';PartNumber=''}}}
+  'MSFT_PhysicalDisk'{[pscustomobject]@{FriendlyName='Realtek RTL9210 NVME';Size=512110190592;BusType=7;MediaType=4;DeviceId='1'};[pscustomobject]@{FriendlyName='BIWIN NV7400 1TB';Size=1024209543168;BusType=17;MediaType=4;DeviceId='0'}}
+  'WmiMonitorConnectionParams'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';VideoOutputTechnology=[uint32]10}}
+  'WmiMonitorID'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';ManufacturerName=[uint16[]][char[]]'LHC';ProductCodeID=[uint16[]][char[]]'0001';UserFriendlyName=[uint16[]][char[]]'N27SH2'}}
+  'Win32_Battery'{}
+  default{}
+ }
+}
+function Get-ItemProperty { [CmdletBinding()]param([string]$LiteralPath) if($LiteralPath -like '*CentralProcessor*'){return [pscustomobject]@{ProcessorNameString='AMD Ryzen 5 5600X 6-Core Processor             '}}; throw 'not found' }
+function Get-ChildItem { [CmdletBinding()]param([string]$LiteralPath) @() }
+function Get-Partition { [CmdletBinding()]param([string]$DriveLetter) [pscustomobject]@{DiskNumber=0} }
+if(-not $env:SystemDrive){$env:SystemDrive='C:'}
+$raw=Get-GSSummaryRaw
+$m=New-GSSystemSummary $raw
+Assert-Equal $m.Processor 'AMD Ryzen 5 5600X (6 ядер / 12 потоков)' 'Collected CPU'
+Assert-Equal $m.Motherboard 'MSI B550M PRO-VDH (MS-7C95)' 'Collected board'
+Assert-Equal $m.Storage 'BIWIN NV7400 1TB NVMe SSD' 'USB enclosure excluded'
+if($m.Graphics -notmatch 'RTX 5060'){throw ('Collected GPU: '+$m.Graphics)}
+if($m.Memory -notmatch '^16GB DDR4 \(2x8\)'){throw ('Collected RAM: '+$m.Memory)}
+if($m.Display -match 'Не определено'){throw ('Monitor lost: '+$m.Display)}
+# Laptop panel reported as internal (0x80000000) must not throw either.
+function Get-CimInstance {
+ [CmdletBinding()]param([string]$ClassName,[string]$Namespace,[int]$OperationTimeoutSec,[string]$Filter)
+ switch($ClassName){
+  'WmiMonitorConnectionParams'{[pscustomobject]@{InstanceName='DISPLAY\CMN15E8\4&1_0';VideoOutputTechnology=[uint32]2147483648}}
+  'WmiMonitorID'{[pscustomobject]@{InstanceName='DISPLAY\CMN15E8\4&1_0';ManufacturerName=[uint16[]][char[]]'CMN';ProductCodeID=[uint16[]][char[]]'15E8';UserFriendlyName=$null}}
+  default{}
+ }
+}
+$laptopRaw=Get-GSSummaryRaw
+Assert-Equal @($laptopRaw.Panels).Count 1 'Internal panel collected'
+Assert-Equal $laptopRaw.Panels[0].Internal $true 'Internal panel flagged'
+
 Write-Host 'System summary gate passed: model names, CPU incl. engineering samples, GPU VRAM/integrated, RAM kit format, internal storage only, EDID panel, battery health, safe file name.'

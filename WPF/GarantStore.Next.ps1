@@ -566,7 +566,12 @@ function Initialize-GSBundleCards {
   [Windows.Automation.AutomationProperties]::SetAutomationId($card,'Bundle-'+[string]$bundle.Id)
   $panel=New-Object Windows.Controls.StackPanel
   [void]$panel.Children.Add((New-GSBundleText ([string]$bundle.Title) 16 '#EEF2EE' 'SemiBold'))
-  $description=New-GSBundleText ([string]$bundle.Description) 11 '#89938B';$description.Margin=New-Object Windows.Thickness(0,6,0,0);$description.MaxHeight=46
+  # Two fixed lines with ellipsis: a long description must never push the
+  # program count out of the fixed-height card. The full text is shown inside.
+  $cardText=[string](Get-GSUiObjectValue $bundle 'CardDescription' ([string]$bundle.Description))
+  $description=New-GSBundleText $cardText 11 '#89938B';$description.Margin=New-Object Windows.Thickness(0,6,0,0)
+  $description.LineStackingStrategy='BlockLineHeight';$description.LineHeight=15;$description.MaxHeight=30;$description.TextTrimming='CharacterEllipsis';$description.ToolTip=[string]$bundle.Description
+  if([string]$bundle.Id -eq 'recommended'){$card.BorderBrush='#2F6B4A';$card.BorderThickness=New-Object Windows.Thickness(1)}
   [void]$panel.Children.Add($description)
   $count=New-GSBundleText ([string]@($bundle.Items).Count+' программ') 11 '#70E2AA';$count.Margin=New-Object Windows.Thickness(0,8,0,0)
   [void]$panel.Children.Add($count)
@@ -599,7 +604,7 @@ function New-GSRecommendedBundle($State){
  if($gpu){$notes+='Драйвер видеокарты '+$gpu+' ставьте в разделе «Драйверы».'}
  if(-not [bool](Get-GSUiObjectValue $State 'Ready' $true)){$notes+='Сначала нажмите «Подготовить систему».'}
  $description='Подобрано по этому компьютеру. Уже установленное будет отмечено автоматически.'+$(if($notes.Count){' '+($notes -join ' ')}else{''})
- return [pscustomobject]@{Id='recommended';Title='Рекомендуем для этого ПК';Description=$description;Items=@($items.ToArray())}
+ return [pscustomobject]@{Id='recommended';Title='Рекомендуем для этого ПК';CardDescription='Подобрано по железу этого компьютера';Description=$description;Items=@($items.ToArray())}
 }
 function Add-GSRecommendedBundle($State){
  try{
