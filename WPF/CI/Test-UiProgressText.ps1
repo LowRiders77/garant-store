@@ -8,7 +8,7 @@ $ErrorActionPreference='Stop'
 $project=Split-Path -Parent $PSScriptRoot
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $project 'GarantStore.Next.ps1'),[ref]$tokens,[ref]$errors)
-foreach($name in @('Get-GSUiObjectValue','Format-GSByteSize','Format-GSEta','Format-GSProgressText','Get-GSPrepareStepText','New-GSRecommendedBundle')){
+foreach($name in @('Get-GSUiObjectValue','Format-GSByteSize','Format-GSEta','Format-GSProgressText','Get-GSPrepareStepText','New-GSRecommendedBundle','Get-GSRetryRequest','Test-GSNetworkRelatedResult')){
  $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}.GetNewClosure(),$true)
  if($null -eq $definition){throw ($name+' is missing from the UI script')}
  . ([scriptblock]::Create($definition.Extent.Text))
@@ -55,4 +55,19 @@ if(-not [bool](@($laptop.Items|Where-Object{$_.Id -eq 'CrystalDewWorld.CrystalDi
 $x86=New-GSRecommendedBundle ([pscustomobject]@{Ready=$true;MissingFrameworks=@();Hardware=[pscustomobject]@{DiscreteGpu='';IsLaptop=$false;RamGB=4;Is64Bit=$false}})
 if(@($x86.Items|Where-Object{$_.Id -eq 'Microsoft.VCRedist.2015+.x64'}).Count){throw 'x64 runtime offered on 32-bit Windows'}
 if($null -ne (New-GSRecommendedBundle $null)){throw 'no state must give no card'}
-Write-Host 'UI progress text and recommendation checks passed.'
+# "Продолжить" after a failure.
+$bundleOp=[pscustomobject]@{Action='bundle';Request=@{Action='bundle';AgreementConsent=$true;Items=@(@{Id='Microsoft.VCRedist.2015+.x64';Source='winget';Name='VC'},@{Id='Microsoft.EdgeWebView2Runtime';Source='winget';Name='WebView2'},@{Id='9NKSQGP7F2NH';Source='msstore';Name='WhatsApp'})}}
+$bundleResult=[pscustomobject]@{Success=$false;ErrorCode='BundlePartial';Data=[pscustomobject]@{Items=@([pscustomobject]@{Id='Microsoft.VCRedist.2015+.x64';Outcome='InstalledVerified';ErrorCode='';Message=''},[pscustomobject]@{Id='Microsoft.EdgeWebView2Runtime';Outcome='Failed';ErrorCode='NetworkFailure';Message='x'},[pscustomobject]@{Id='9NKSQGP7F2NH';Outcome='Failed';ErrorCode='StoreServiceConsentRequired';Message='y'})}}
+$retry=Get-GSRetryRequest $bundleOp $bundleResult
+if($null -eq $retry){throw 'failed bundle must be offered to continue'}
+Assert-Equal 'only failed items retried' 'Microsoft.EdgeWebView2Runtime' ((@($retry.Items)|ForEach-Object{$_.Id}) -join ',')
+Assert-Equal 'original request untouched' 3 @($bundleOp.Request.Items).Count
+Assert-Equal 'network detected in bundle' $true (Test-GSNetworkRelatedResult $bundleResult)
+$installOp=[pscustomobject]@{Action='install';Request=@{Action='install';Id='9NKSQGP7F2NH';Source='msstore';AgreementConsent=$true}}
+$netFail=[pscustomobject]@{Success=$false;ErrorCode='NetworkFailure';TechnicalMessage='Connection lost (0x80d03805)'}
+Assert-Equal 'install retried after network loss' '9NKSQGP7F2NH' (Get-GSRetryRequest $installOp $netFail).Id
+if($null -ne (Get-GSRetryRequest $installOp ([pscustomobject]@{Success=$false;ErrorCode='PackageAgreementsRequired'}))){throw 'agreement refusal must not be auto-retried'}
+if($null -ne (Get-GSRetryRequest $installOp ([pscustomobject]@{Success=$true;ErrorCode=''}))){throw 'success must not offer a retry'}
+Assert-Equal 'prepare continued' 'prepare' (Get-GSRetryRequest ([pscustomobject]@{Action='prepare';Request=@{Action='prepare';AgreementConsent=$true}}) ([pscustomobject]@{Success=$false;ErrorCode='PreparationIncomplete'})).Action
+Assert-Equal 'non-network failure' $false (Test-GSNetworkRelatedResult ([pscustomobject]@{Success=$false;ErrorCode='DeploymentFailure';TechnicalMessage='exit 1603'}))
+Write-Host 'UI progress text, recommendation and retry checks passed.'

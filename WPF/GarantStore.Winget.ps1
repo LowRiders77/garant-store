@@ -401,6 +401,11 @@ function Invoke-GSWinget {
         throw (New-GSClassifiedException -Code 'NeedsPreparation' -Message 'Microsoft Store source rejected by this WinGet version (0x8a15005e). WinGet must be updated.')
     }
 
+    if ($result.ExitCode -ne 0 -and $command -in @('install','upgrade','show') -and (Test-GSNetworkFailureText $combinedOutput)) {
+        $code = [regex]::Match($combinedOutput,'(?i)0x[0-9a-f]{8}').Value
+        throw (New-GSClassifiedException -Code 'NetworkFailure' -Message ('Connection lost during winget ' + $command + ' (' + $(if ($code) { $code } else { 'exit ' + $result.ExitCode }) + ').'))
+    }
+
     $agreementRequirement = Get-GSWingetAgreementRequirement `
         -ExitCode ([int]$result.ExitCode) `
         -StdOut ([string]$result.StdOut) `

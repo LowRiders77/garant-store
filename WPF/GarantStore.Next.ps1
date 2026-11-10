@@ -78,7 +78,7 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <Button x:Name="GoDrivers" Tag="M4,4 H16 V16 H4 Z M8,8 H12 V12 H8 Z M7,1 V4 M13,1 V4 M7,16 V19 M13,16 V19" Content="Драйверы" Style="{StaticResource NavButton}"/>
     <Button x:Name="GoComponents" Tag="M2,3 H18 V17 H2 Z M10,3 V17 M2,10 H18" Content="Компоненты Windows" Style="{StaticResource NavButton}"/>
     <Button x:Name="GoSystem" Tag="M2,3 H18 V14 H2 Z M10,14 V18 M6,18 H14" Content="Моя система" AutomationProperties.AutomationId="OpenSystemInformation" Style="{StaticResource NavButton}"/>
-    <Button x:Name="Doctor" Tag="M2,10 H6 L8,5 L11,15 L14,10 H18" Content="Диагностика" Style="{StaticResource NavButton}"/>
+    <Button x:Name="Doctor" Tag="M2,10 H6 L8,5 L11,15 L14,10 H18" Content="Собрать диагностику" AutomationProperties.AutomationId="CollectDiagnostics" ToolTip="Один архив с журналами для мастера — сохраняется на рабочий стол" Style="{StaticResource NavButton}"/>
     <Button x:Name="Repair" Tag="M17,8 A7,7 0 1 0 17,13 M17,3 V8 H12" Content="Восстановить WinGet" Style="{StaticResource NavButton}"/>
     <Button x:Name="AboutButton" Tag="M18,10 A8,8 0 1 1 2,10 A8,8 0 1 1 18,10 M10,9 V14 M10,6 V6.5" Content="О нас" Style="{StaticResource NavButton}" Margin="0,16,0,0"/>
    </StackPanel></ScrollViewer>
@@ -125,9 +125,10 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
    </Grid>
   </Grid>
   <Border Grid.Row="4" CornerRadius="12" Background="#1B211D" BorderBrush="#303832" BorderThickness="1" Padding="14" Margin="0,18,0,0">
-   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="168"/></Grid.ColumnDefinitions>
+   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="168"/></Grid.ColumnDefinitions>
     <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse x:Name="ActivityDot" Width="7" Height="7" Fill="#70E2AA" Margin="0,0,11,0"/><StackPanel><TextBlock x:Name="Status" AutomationProperties.AutomationId="OperationStatus" Text="Готово к работе" FontWeight="Medium" FontSize="12"/><TextBlock x:Name="Detail" AutomationProperties.AutomationId="OperationDetail" Text="Выберите приложение или воспользуйтесь поиском" FontSize="11" Foreground="#89938B" Margin="0,4,0,0"/></StackPanel></StackPanel>
-    <ProgressBar x:Name="Progress" Grid.Column="1" Height="4" VerticalAlignment="Center" Foreground="#70E2AA" Background="#343C36" BorderThickness="0"/>
+    <Button x:Name="RetryOperation" AutomationProperties.AutomationId="RetryOperation" Grid.Column="1" Content="Повторить" Style="{StaticResource AccentButton}" Visibility="Collapsed" Margin="0,0,16,0" VerticalAlignment="Center"/>
+    <ProgressBar x:Name="Progress" Grid.Column="2" Height="4" VerticalAlignment="Center" Foreground="#70E2AA" Background="#343C36" BorderThickness="0"/>
    </Grid>
   </Border>
  </Grid>
@@ -145,7 +146,7 @@ $script:uiDispatcher.add_UnhandledException({param($sender,$e)
  $e.Handled=$true
  try{$Status.Text='Ошибка интерфейса';$Detail.Text='Подробности записаны в диагностический журнал.'}catch{}
 })
-foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress','PrepBanner','PrepBannerText','PrepareButton','ActivityDot')) {
+foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress','PrepBanner','PrepBannerText','PrepareButton','ActivityDot','RetryOperation')) {
  Set-Variable -Scope Script -Name $name -Value $win.FindName($name)
 }
 $iconPath=Join-Path $root 'Assets\GarantStoreMark.ico'
@@ -449,6 +450,110 @@ function Start-GSSystemPreparation($ThenRequest=$null){
  if($null -ne $PrepBanner){$PrepBanner.Visibility='Collapsed'}
  try{Run-Core @{Action='prepare';AgreementConsent=$true}}catch{$Status.Text=$_.Exception.Message}
 }
+function Get-GSDiagnosticsModelName{
+ # Same name as the "Моя система" report; quick CIM fallback if it was not opened.
+ try{if($script:gsSystemCache -and $script:gsSystemCache.Profile){$n=Get-GSSystemDisplayName $script:gsSystemCache.Profile;if($n){return [string]$n}}}catch{}
+ try{$cs=Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 5 -ErrorAction Stop;return (Format-GSModelName ([string]$cs.Manufacturer) ([string]$cs.Model) '' '' ([Environment]::MachineName))}catch{return [Environment]::MachineName}
+}
+function Add-GSDriverDiagnosticsToZip([string]$ZipPath){
+ # The driver engine log lives behind its elevated local server; it is only
+ # reachable while the driver module is connected in this session.
+ $endpoint=Get-Variable -Name driverEndpoint -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+ if(-not $endpoint){return 'журнал драйверов не добавлен: модуль «Драйверы» в этом сеансе не открывался'}
+ try{
+  $bytes=[byte[]](Invoke-GSDriverApi -Path '/api/diagnostics')
+  Add-Type -AssemblyName System.IO.Compression,System.IO.Compression.FileSystem
+  $archive=[IO.Compression.ZipFile]::Open($ZipPath,[IO.Compression.ZipArchiveMode]::Update)
+  try{$entry=$archive.CreateEntry('Garant-PO-Diagnostics.zip');$stream=$entry.Open();try{$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()}}finally{$archive.Dispose()}
+  return 'журнал драйверов добавлен'
+ }catch{return 'журнал драйверов не добавлен: '+$_.Exception.Message}
+}
+function Complete-GSDiagnosticsOperation($Result){
+ $data=Get-GSUiObjectValue $Result 'Data' $null
+ $path=[string](Get-GSUiObjectValue $data 'Path' '')
+ if(-not $path -or -not (Test-Path -LiteralPath $path)){return}
+ $driverNote=Add-GSDriverDiagnosticsToZip $path
+ $Status.Text='Диагностика собрана'
+ $Detail.Text=[IO.Path]::GetFileName($path)+' — на рабочем столе ('+$driverNote+')'
+ try{Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"'+$path+'"')}catch{}
+}
+function Get-GSRetryRequest($Operation,$Result){
+ # What "Продолжить" repeats after a failure: the same install, only the failed
+ # programs of a bundle, or the system preparation.
+ $success=[bool](Get-GSUiObjectValue $Result 'Success' $false)
+ if($success){return $null}
+ $code=[string](Get-GSUiObjectValue $Result 'ErrorCode' '')
+ switch([string]$Operation.Action){
+  'install'{
+   if($code -in @('NetworkFailure','DeploymentFailure','WingetError','StoreDeploymentTimeout','ProcessTimeout','SourceUnavailable','UnknownError')){return (@{}+$Operation.Request)}
+  }
+  'bundle'{
+   $data=Get-GSUiObjectValue $Result 'Data' $null
+   $failed=@(@(Get-GSUiObjectValue $data 'Items' @())|Where-Object{$_ -and [string]$_.Outcome -notin @('InstalledVerified','UpdateVerified','AlreadyCurrent','StoreUpdateUnknown') -and [string]$_.ErrorCode -ne 'StoreServiceConsentRequired'}|ForEach-Object{[string]$_.Id})
+   if($failed.Count){$items=@(@($Operation.Request.Items)|Where-Object{$failed -contains [string]$_.Id});if($items.Count){$retry=@{}+$Operation.Request;$retry.Items=$items;return $retry}}
+   elseif($code -eq 'NetworkFailure'){return (@{}+$Operation.Request)}
+  }
+  'prepare'{return (@{}+$Operation.Request)}
+ }
+ return $null
+}
+function Test-GSNetworkRelatedResult($Result){
+ $text=[string](Get-GSUiObjectValue $Result 'ErrorCode' '')+' '+[string](Get-GSUiObjectValue $Result 'TechnicalMessage' '')
+ $data=Get-GSUiObjectValue $Result 'Data' $null
+ foreach($item in @(Get-GSUiObjectValue $data 'Items' @())){if($item){$text+=' '+[string]$item.ErrorCode+' '+[string]$item.Message}}
+ foreach($step in @(Get-GSUiObjectValue $data 'Steps' @())){if($step){$text+=' '+[string]$step.Detail}}
+ return ($text -match '(?i)NetworkFailure|Download failed|0x80d0|0x80072|0x8a15003b|SSL|WINHTTP|connection')
+}
+function Set-GSRetryOffer($Request,[bool]$WatchNetwork){
+ $script:retryRequest=$Request
+ if($null -eq $RetryOperation){return}
+ if($null -eq $Request){$RetryOperation.Visibility='Collapsed';Stop-GSNetworkWatch;return}
+ $RetryOperation.Content=switch([string]$Request.Action){'bundle'{'Продолжить установку'}'prepare'{'Продолжить подготовку'}default{'Повторить'}}
+ $RetryOperation.Visibility='Visible'
+ if($WatchNetwork){Start-GSNetworkWatch}
+}
+function Invoke-GSRetryOffer{
+ $request=$script:retryRequest
+ if($null -eq $request -or $null -ne $script:op){return}
+ Set-GSRetryOffer $null $false
+ if([string]$request.Action -eq 'bundle'){Update-GSBundleRetryRows $request}
+ try{Run-Core $request}catch{$Status.Text=$_.Exception.Message}
+}
+function Update-GSBundleRetryRows($Request){
+ foreach($item in @($Request.Items)){$row=Find-GSBundleRow ([string]$item.Id);if($row){Set-GSBundleRowState $row 'Повторяем установку...' '#ADB7AF' $true $true}}
+}
+function Start-GSNetworkWatch{
+ # Every 4 s: a non-blocking TCP probe to Microsoft's connectivity host. When it
+ # answers, the user is asked to continue - no need to look for a button.
+ $script:netProbe=$null
+ $script:netTimer.Start()
+}
+function Stop-GSNetworkWatch{
+ if($script:netTimer){$script:netTimer.Stop()}
+ if($script:netProbe){try{$script:netProbe.Client.Dispose()}catch{};$script:netProbe=$null}
+}
+function Update-GSNetworkWatch{
+ if($null -eq $script:retryRequest){Stop-GSNetworkWatch;return}
+ $probe=$script:netProbe
+ if($null -ne $probe){
+  if(-not $probe.Task.IsCompleted){
+   if(((Get-Date)-$probe.Started).TotalSeconds -lt 8){return}
+   try{$probe.Client.Dispose()}catch{};$script:netProbe=$null;return
+  }
+  $ok=(-not $probe.Task.IsFaulted -and -not $probe.Task.IsCanceled -and $probe.Client.Connected)
+  try{$probe.Client.Dispose()}catch{};$script:netProbe=$null
+  if($ok){
+   Stop-GSNetworkWatch
+   if($null -ne $script:op){return}
+   $what=switch([string]$script:retryRequest.Action){'bundle'{'установку оставшихся программ набора'}'prepare'{'подготовку системы'}default{'установку'}}
+   $Status.Text='Связь восстановлена'
+   if([Windows.MessageBox]::Show($win,'Связь с интернетом восстановлена. Продолжить '+$what+'?','Garant Store',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question) -eq [Windows.MessageBoxResult]::Yes){Invoke-GSRetryOffer}
+   else{$Detail.Text='Нажмите «'+[string]$RetryOperation.Content+'», когда будете готовы.'}
+  }
+  return
+ }
+ try{$client=New-Object Net.Sockets.TcpClient;$script:netProbe=[pscustomobject]@{Client=$client;Task=$client.ConnectAsync('www.msftconnecttest.com',80);Started=Get-Date}}catch{$script:netProbe=$null}
+}
 function Run-Core([hashtable]$req){
  if($null -ne $script:op){return}
  Remove-Temp
@@ -477,6 +582,7 @@ function Run-Core([hashtable]$req){
  $script:op=[pscustomobject]@{Id=$req.OperationId;Process=$process;Stopped=$false;BundlePosition='';BundleItem='';LogOffset=[long]0;LogDecoder=(New-Object Text.UTF8Encoding($false)).GetDecoder();Action=$req.Action;Out=$outputFile;Result=$resultFile;Preview=$previewFile;Progress=$progressFile;SeenPreview=$false;Query=$opQuery;Source=$opSource;AgreementConsent=[bool]$req.AgreementConsent;Request=@{}+$req}
  $Search.IsEnabled=$false;$Install.IsEnabled=$false;$BundleInstall.IsEnabled=$false;$Stop.IsEnabled=$true
  $Status.Text=switch([string]$req.Action){'search'{'Поиск...'}'install'{'Установка...'}'bundle'{'Установка набора...'}'bundlestate'{'Проверка набора...'}'prepare'{'Подготовка системы...'}'doctor'{'Диагностика...'}'repairwinget'{'Восстановление WinGet...'}'diagnostics'{'Сбор диагностики...'}default{'Выполняется...'}}
+ if($null -ne $RetryOperation){$RetryOperation.Visibility='Collapsed'};Stop-GSNetworkWatch
  $Detail.Text='Подготовка...';Reset-GSProgressValue;$Progress.IsIndeterminate=$true;Set-GSActivityPulse $true
  $tick.Start()
 }
@@ -756,6 +862,7 @@ $tick.Add_Tick({
  $o=$script:op
  $agreementRetry=$false
  $serviceConsentRetry=$false
+ $retryAfterTick=$null
  $prepareRetry=$false
  $prepareFollowUp=$null
  try{
@@ -790,7 +897,7 @@ $tick.Add_Tick({
    $resultRows=Get-GSUiObjectValue $v 'Results' $null
    if($o.Action -eq 'search' -and $null -ne $resultRows){Load-Results $resultRows}
    $resultSuccess=[bool](Get-GSUiObjectValue $v 'Success' $false)
-   $Status.Text=if($resultSuccess){switch($resultStatus){'AlreadyCurrent'{'Актуально'}'StoreUpdateUnknown'{'Проверка не завершена'}'UpdateVerified'{'Обновлено'}'InstalledVerified'{'Установлено'}'RepairVerified'{'Поиск проверен'}'RepairPartial'{'Частично проверено'}'PreparationCompleted'{'Система подготовлена'}'PreparationReady'{'Система готова'}default{'Готово'}}}elseif($resultStatus -eq 'NeedsPreparation'){'Нужна подготовка системы'}elseif($resultStatus -eq 'PreparationIncomplete'){'Подготовка не завершена'}else{'Ошибка'}
+   $Status.Text=if($resultSuccess){switch($resultStatus){'AlreadyCurrent'{'Актуально'}'StoreUpdateUnknown'{'Проверка не завершена'}'UpdateVerified'{'Обновлено'}'InstalledVerified'{'Установлено'}'RepairVerified'{'Поиск проверен'}'RepairPartial'{'Частично проверено'}'PreparationCompleted'{'Система подготовлена'}'DiagnosticsCreated'{'Диагностика собрана'}'PreparationReady'{'Система готова'}default{'Готово'}}}elseif($resultStatus -eq 'NeedsPreparation'){'Нужна подготовка системы'}elseif($resultStatus -eq 'PreparationIncomplete'){'Подготовка не завершена'}else{'Ошибка'}
    $Detail.Text=switch($resultStatus){
     'AlreadyCurrent'{'Приложение уже установлено и обновление не требуется.'}
     'StoreUpdateUnknown'{'Приложение установлено, но наличие обновления подтвердить не удалось. Изменений не внесено.'}
@@ -800,6 +907,13 @@ $tick.Add_Tick({
     default{$resultMessage}
    }
    if($o.Action -in @('bundlestate','bundle')){Complete-GSBundleOperation $o $v}
+   if($o.Action -eq 'diagnostics' -and $resultSuccess){Complete-GSDiagnosticsOperation $v}
+   $retryOffer=Get-GSRetryRequest $o $v
+   if($null -ne $retryOffer -and $resultErrorCode -ne 'NeedsPreparation'){
+    $networkRelated=Test-GSNetworkRelatedResult $v
+    if($networkRelated){$Detail.Text='Связь прервалась. Как только интернет появится, Garant Store предложит продолжить.'}
+    $retryAfterTick=@{Request=$retryOffer;Network=$networkRelated}
+   }
    if($o.Action -eq 'prepare'){
     $prepData=Get-GSUiObjectValue $v 'Data' $null
     $prepAfter=Get-GSUiObjectValue $prepData 'After' $null
@@ -827,6 +941,7 @@ $tick.Add_Tick({
  $Install.IsEnabled=($null -ne $Results.SelectedItem)
  Update-GSBundleSummary
  Remove-Temp
+ if($null -ne $retryAfterTick -and -not $prepareRetry -and $prepareFollowUp -isnot [hashtable]){Set-GSRetryOffer $retryAfterTick.Request ([bool]$retryAfterTick.Network)}
  if($agreementRetry){
   $query=$o.Query;$source=$o.Source
   $prompt='Для поиска Garant Store запросил согласие с условиями источника Microsoft Store.'+"`n`n"+
@@ -925,7 +1040,12 @@ $Install.Add_Click({
  if([Windows.MessageBox]::Show($message,'Garant Store','YesNo','Question') -ne 'Yes'){return}
  try{Run-Core @{Action='install';Name=$v.Name;Id=$v.Id;Source=$v.Source;KnownStatus=$v.Status;AvailableVersion=$v.Version;AgreementConsent=$true}}catch{$Status.Text=$_.Exception.Message}
 })
-$Doctor.Add_Click({Page 'log';try{Run-Core @{Action='doctor'}}catch{$Status.Text=$_.Exception.Message}})
+$Doctor.Add_Click({try{Run-Core @{Action='diagnostics'}}catch{$Status.Text=$_.Exception.Message}})
+$RetryOperation.Add_Click({Invoke-GSRetryOffer})
+$script:retryRequest=$null;$script:netProbe=$null
+$script:netTimer=New-Object Windows.Threading.DispatcherTimer
+$script:netTimer.Interval=[TimeSpan]::FromSeconds(4)
+$script:netTimer.Add_Tick({try{Update-GSNetworkWatch}catch{Stop-GSNetworkWatch;Write-GSUiFailure -Component 'Network.Watch' -Exception $_.Exception}})
 $Repair.Add_Click({
  if([Windows.MessageBox]::Show('Восстановить WinGet?','Garant Store','YesNo','Warning') -eq 'Yes'){Page 'log';try{Run-Core @{Action='repairwinget'}}catch{$Status.Text=$_.Exception.Message}}
 })
@@ -944,7 +1064,7 @@ $script:prepTimer=New-Object Windows.Threading.DispatcherTimer
 $script:prepTimer.Interval=[TimeSpan]::FromMilliseconds(1000)
 $script:prepTimer.Add_Tick({try{Complete-GSPreparationCheck}catch{$script:prepTimer.Stop();Write-GSUiFailure -Component 'Prepare.StartupCheckTick' -Exception $_.Exception}})
 $win.Add_ContentRendered({if($env:GS_WPF_SMOKE -ne '1' -and $null -eq $script:prepCheck -and $null -eq $script:prepState){Start-GSPreparationCheck}})
-$win.Add_Closed({if($null -ne $script:op){Stop-GSOperationProcessTree $script:op.Process};if($null -ne $script:prepCheck){try{Stop-GSOperationProcessTree $script:prepCheck.Process}catch{}};Remove-Temp})
+$win.Add_Closed({Stop-GSNetworkWatch;if($null -ne $script:op){Stop-GSOperationProcessTree $script:op.Process};if($null -ne $script:prepCheck){try{Stop-GSOperationProcessTree $script:prepCheck.Process}catch{}};Remove-Temp})
 Category 'Популярные';Page 'catalog'
 if($env:GS_WPF_SMOKE -eq '1'){
  $smoke=New-Object Windows.Threading.DispatcherTimer

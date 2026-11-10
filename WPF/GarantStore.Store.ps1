@@ -139,6 +139,16 @@ function Invoke-GSStorePackagePipeline {
     Write-GSProgress -Stage 'Verifying' -Indeterminate $true -Detail 'ExactPostVerification'
 
     $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true
+    # Microsoft Store finishes registration in the background: WinGet already
+    # printed "installed" while the package was not listed yet (field: WhatsApp).
+    # Re-check for up to ~90 s before calling it a failure.
+    $deadline = (Get-Date).AddSeconds(90)
+    while ($after.Status -in @('NotInstalled','Unknown') -and (Get-Date) -lt $deadline) {
+        Write-GSProgress -Stage 'Verifying' -Indeterminate $true -Detail 'StoreRegistration'
+        Start-Sleep -Seconds 6
+        Clear-GSInventoryCache
+        $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true
+    }
     Write-GSLog -Message ('Store post-state=' + $after.Status + '; installed=' + $after.InstalledVersion + '; available=' + $after.AvailableVersion) -Level 'INFO'
 
     if ($after.Status -in @('NotInstalled','Unknown','UpdateAvailable')) {

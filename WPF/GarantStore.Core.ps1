@@ -41,7 +41,8 @@ $moduleFiles = @(
     'GarantStore.Prepare.ps1',
     'GarantStore.Store.ps1',
     'GarantStore.Bundles.ps1',
-    'GarantStore.Diagnostics.ps1'
+    'GarantStore.Diagnostics.ps1',
+    'GarantStore.SystemSummary.ps1'
 )
 
 foreach ($moduleFile in $moduleFiles) {
