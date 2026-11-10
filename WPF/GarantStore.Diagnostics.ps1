@@ -179,9 +179,18 @@ function New-GSDiagnosticsArchive {
             Remove-Item -LiteralPath $zip -Force
         }
 
-        # ZipFile writes '/' separators; Compress-Archive in 5.1 wrote backslashes that other tools warn about.
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+        # Entries are added one by one: CreateFromDirectory on .NET Framework (PowerShell 5.1) still writes '\'.
+        $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $prefix = $stage.TrimEnd('\','/').Length + 1
+            foreach ($file in @(Get-ChildItem -LiteralPath $stage -Recurse -File)) {
+                $entryName = $file.FullName.Substring($prefix).Replace('\','/')
+                [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName, [IO.Compression.CompressionLevel]::Optimal)
+            }
+        } finally {
+            $archive.Dispose()
+        }
         Write-GSLog -Message ('Diagnostics ZIP created: ' + $zip) -Level 'INFO'
 
         return [pscustomobject]@{
