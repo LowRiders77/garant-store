@@ -69,6 +69,20 @@ function Get-Packages($devices,[switch]$KnownOnly) {
   $res=New-Object System.Collections.Generic.List[object]
   foreach ($d in $devices) {
     $keys = @(Get-NormalIds $d)
+    # NVIDIA / AMD: только официальный пакет производителя (с фирменной панелью).
+    if ($d.kind -eq 'GPU' -and -not $KnownOnly -and @($keys | Where-Object {$_ -match '^PCI\\VEN_(10DE|1002)&DEV_'}).Count) {
+      $fetch = { param($u,$r) Get-GSWebText $u $r }
+      $vendorPkg = $null
+      try {
+        if (@($keys | Where-Object {$_ -match '^PCI\\VEN_10DE&DEV_'}).Count) { $vendorPkg = Resolve-GSNvidiaOfficialDriver -Device $d -Fetch $fetch -IsNotebook (Test-GSNotebook) }
+        else { $vendorPkg = Resolve-GSAmdOfficialDriver -Device $d -Fetch $fetch }
+      } catch { Log ('Официальный видеодрайвер не определён: ' + $_.Exception.Message) }
+      if ($null -ne $vendorPkg) {
+        if (!(@($res | Where-Object {$_.url -eq $vendorPkg.url}).Count)) { $res.Add($vendorPkg) }
+        continue
+      }
+      Log 'Официальный пакет не найден — используем Windows Update / DRP'
+    }
     # Intel Alder Lake UP3 integrated GPU: official Intel executable, no unrelated OEM subsys driver.
     if ($d.kind -eq 'GPU' -and $keys -contains 'PCI\VEN_8086&DEV_46A8') {
       $url='https://downloadmirror.intel.com/929468/gfx_win_101.7092.exe'

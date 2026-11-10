@@ -26,10 +26,14 @@ function Format-GSModelName([string]$Manufacturer,[string]$Model,[string]$Versio
  $vendor=Format-GSVendorName $Manufacturer
  $name=ConvertTo-GSCleanText $Model
  if($vendor -eq 'Lenovo' -and -not (Test-GSPlaceholderText $Version) -and $Version -match '[A-Za-z]{3,}'){$name=ConvertTo-GSCleanText $Version}
+ $name=($name -replace '\s*\([^)]{16,}\)','').Trim()
  if(Test-GSPlaceholderText $name){$name=''}
  if($name -match '^(.+?)_([A-Za-z0-9-]+)$'){$head=$Matches[1];$tail=$Matches[2];if($head.Contains($tail)){$name=$head}}
  if(-not $name){
   $boardText=ConvertTo-GSCleanText $Board
+  # Chinese X79/X99 boards put a chipset essay in brackets:
+  # "X79 (INTEL Xeon E5/Corei7 DMI2 - C600/C200 Cipset)" -> "X79". Short codes like "(MS-7C95)" stay.
+  $boardText=($boardText -replace '\s*\([^)]{16,}\)','').Trim()
   if(-not (Test-GSPlaceholderText $boardText)){$name=$boardText}
  }
  if($name -and $vendor -and $name -notmatch ('^(?i)'+[regex]::Escape($vendor))){$name=$vendor+' '+$name}
@@ -285,8 +289,9 @@ function New-GSSystemSummary($Raw){
 }
 
 function ConvertTo-GSSafeFileName([string]$Name){
- $clean=($Name -replace '[\\/:*?"<>|]',' ' -replace '\s+',' ').Trim(' ','.')
- if($clean.Length -gt 80){$clean=$clean.Substring(0,80).Trim()}
+ $clean=($Name -replace '\s*\([^)]{16,}\)','' -replace '[\\/:*?"<>|]',' ' -replace '\s+',' ').Trim(' ','.')
+ if($clean.Length -gt 60){$clean=$clean.Substring(0,60);$cut=$clean.LastIndexOf(' ');if($cut -gt 20){$clean=$clean.Substring(0,$cut)}}
+ $clean=($clean -replace '\s*\([^)]*$','').Trim(' ','.','-')
  if(-not $clean){$clean='Компьютер'}
  return $clean
 }

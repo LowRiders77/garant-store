@@ -12,9 +12,10 @@ Set-StrictMode -Version Latest
 # Oldest WinGet verified against the current msstore source in Windows CI.
 $script:GSMinimumWingetVersion = [version]'1.11.0'
 $script:GSStoreProbeId = '9NKSQGP7F2NH'
+# UI.Xaml is not listed: WinGet 1.10+ no longer depends on it and the current
+# DesktopAppInstaller_Dependencies.zip does not ship it (field: "still missing UIXaml").
 $script:GSRequiredFrameworks = @(
     [pscustomobject]@{ Name = 'Microsoft.VCLibs.140.00.UWPDesktop'; Label = 'VCLibs' },
-    [pscustomobject]@{ Name = 'Microsoft.UI.Xaml.2.8'; Label = 'UIXaml' },
     [pscustomobject]@{ Name = 'Microsoft.WindowsAppRuntime.1.8'; Label = 'WindowsAppRuntime' }
 )
 
@@ -25,23 +26,36 @@ function Test-GSStoreCertificateFailure {
 
 function Get-GSStoreSourceProbe {
     # Classifies the msstore source without accepting anything:
-    # Ok | NeedsConsent | CertificateError | Unavailable | NoWinget
-    param([bool]$AcceptAgreements = $false, [int]$TimeoutSeconds = 30)
+    # Ok | NeedsConsent | CertificateError | NetworkError | Unavailable | NoWinget
+    # Uses `winget show` (what installs use); `search --id` returns "no packages"
+    # for Store IDs on current WinGet and was misread as a broken source.
+    param([bool]$AcceptAgreements = $false, [int]$TimeoutSeconds = 60, [int]$Attempts = 3)
     $exe = Get-GSWingetPath
     if (-not $exe) { return [pscustomobject]@{ Status = 'NoWinget'; Detail = 'WinGet is not installed.' } }
-    $arguments = @('search','--id',$script:GSStoreProbeId,'--source','msstore','--disable-interactivity')
+    $arguments = @('show','--id',$script:GSStoreProbeId,'--source','msstore','--disable-interactivity')
     if ($AcceptAgreements) { $arguments += '--accept-source-agreements' }
-    try {
-        $capture = Invoke-GSNativeProcess -FileName $exe -Arguments $arguments -TimeoutSeconds $TimeoutSeconds
-    } catch {
-        return [pscustomobject]@{ Status = 'Unavailable'; Detail = $_.Exception.Message }
+    $last = [pscustomobject]@{ Status = 'Unavailable'; Detail = 'not checked' }
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            $capture = Invoke-GSNativeProcess -FileName $exe -Arguments $arguments -TimeoutSeconds $TimeoutSeconds
+        } catch {
+            $last = [pscustomobject]@{ Status = 'Unavailable'; Detail = $_.Exception.Message }
+            continue
+        }
+        $text = [string]$capture.StdOut + [Environment]::NewLine + [string]$capture.StdErr
+        if (Test-GSStoreCertificateFailure $text) { return [pscustomobject]@{ Status = 'CertificateError'; Detail = '0x8a15005e: msstore certificate rejected by this WinGet version.' } }
+        if ([int]$capture.ExitCode -eq 0 -and $text -match [regex]::Escape($script:GSStoreProbeId)) { return [pscustomobject]@{ Status = 'Ok'; Detail = '' } }
+        $agreement = Get-GSWingetAgreementRequirement -ExitCode ([int]$capture.ExitCode) -StdOut ([string]$capture.StdOut) -StdErr ([string]$capture.StdErr)
+        if ($agreement -eq 'Source') { return [pscustomobject]@{ Status = 'NeedsConsent'; Detail = 'msstore source terms not accepted yet.' } }
+        $code = [regex]::Match($text,'(?i)0x[0-9a-f]{8}').Value
+        if (Test-GSNetworkFailureText $text) {
+            $last = [pscustomobject]@{ Status = 'NetworkError'; Detail = ('Connection to Microsoft Store failed (' + $(if ($code) { $code } else { 'exit ' + $capture.ExitCode }) + ').') }
+        } else {
+            $last = [pscustomobject]@{ Status = 'Unavailable'; Detail = ('Exit ' + $capture.ExitCode + $(if ($code) { ' ' + $code } else { '' })) }
+        }
+        if ($attempt -lt $Attempts) { Start-Sleep -Seconds (3 * $attempt) }
     }
-    $text = [string]$capture.StdOut + [Environment]::NewLine + [string]$capture.StdErr
-    if (Test-GSStoreCertificateFailure $text) { return [pscustomobject]@{ Status = 'CertificateError'; Detail = '0x8a15005e: msstore certificate rejected by this WinGet version.' } }
-    if ($text -match [regex]::Escape($script:GSStoreProbeId)) { return [pscustomobject]@{ Status = 'Ok'; Detail = '' } }
-    $agreement = Get-GSWingetAgreementRequirement -ExitCode ([int]$capture.ExitCode) -StdOut ([string]$capture.StdOut) -StdErr ([string]$capture.StdErr)
-    if ($agreement -eq 'Source') { return [pscustomobject]@{ Status = 'NeedsConsent'; Detail = 'msstore source terms not accepted yet.' } }
-    return [pscustomobject]@{ Status = 'Unavailable'; Detail = ('Exit ' + $capture.ExitCode + ': ' + ($text.Trim() -split "`r?`n" | Select-Object -Last 1)) }
+    return $last
 }
 
 function Get-GSFrameworkState {
@@ -77,11 +91,27 @@ function Get-GSHardwareHints {
     $gpuNames = @()
     $isLaptop = $false
     $ramGb = 0
-    try { $gpuNames = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object { [string]$_.Name }) } catch {}
+    $gpuVendors = @()
+    try {
+        $controllers = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
+        $gpuNames = @($controllers | ForEach-Object { [string]$_.Name })
+        $gpuVendors = @($controllers | ForEach-Object { if ([string]$_.PNPDeviceID -match '^PCI\\VEN_([0-9A-Fa-f]{4})') { $Matches[1].ToUpperInvariant() } } | Select-Object -Unique)
+    } catch {}
+    # Vendor control panels (desktop right-click entry) present for this user?
+    $panels = @()
+    foreach ($pair in @(@('10DE','NVIDIACorp.NVIDIAControlPanel'),@('8086','AppUp.IntelGraphicsExperience'),@('1002','AdvancedMicroDevicesInc-RSXCM'))) {
+        try { if (@(Get-AppxPackage -Name $pair[1] -ErrorAction Stop).Count) { $panels += $pair[0] } } catch {}
+    }
+    if ($env:ProgramFiles) {
+        if (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NVIDIA Corporation\Control Panel Client\nvcplui.exe')) { $panels += '10DE' }
+        if (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'AMD\CNext\CNext\RadeonSoftware.exe')) { $panels += '1002' }
+    }
     try { $isLaptop = (@(Get-CimInstance Win32_Battery -ErrorAction Stop).Count -gt 0) } catch {}
     try { $ramGb = [int][Math]::Round(([double](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory) / 1GB) } catch {}
     return [pscustomobject]@{
         DiscreteGpu = Get-GSGpuVendorHint -Names $gpuNames
+        GpuVendors = @($gpuVendors)
+        GpuPanels = @($panels | Select-Object -Unique)
         IsLaptop = $isLaptop
         RamGB = $ramGb
         Is64Bit = [Environment]::Is64BitOperatingSystem
@@ -272,6 +302,7 @@ function Invoke-GSSystemPreparation {
         switch ([string]$probe.Status) {
             'Ok' { Add-Step 'sources' $(if ($AcceptStoreTerms) { 'Done' } else { 'Ok' }) 'Microsoft Store source responds.' }
             'NeedsConsent' { Add-Step 'sources' 'Skipped' 'Microsoft Store terms were not accepted; the source will ask on first use.' }
+            'NetworkError' { Add-Step 'sources' 'Failed' ('NetworkFailure: ' + [string]$probe.Detail) }
             default { Add-Step 'sources' 'Failed' ([string]$probe.Status + ': ' + [string]$probe.Detail) }
         }
     }

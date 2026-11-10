@@ -523,20 +523,31 @@ function Install-GSWindowsAppRuntime18 {
 }
 
 function New-GSAppInstallerDependencyWorkspace {
+    # The 93 MB archive is kept for 12 hours: preparation and the App Installer
+    # dependency recovery used to download it twice in one run (field log).
     $archiveUri = 'https://github.com/microsoft/winget-cli/releases/latest/download/DesktopAppInstaller_Dependencies.zip'
-    $archive = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-WinGetDependencies-' + [Guid]::NewGuid().ToString('N') + '.zip')
+    $cacheDir = Join-Path ([IO.Path]::GetTempPath()) 'GarantStore-Cache'
+    $archive = Join-Path $cacheDir 'DesktopAppInstaller_Dependencies.zip'
     $extract = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-WinGetDependencies-' + [Guid]::NewGuid().ToString('N'))
 
     try {
-        Download-GSFileWithRetry -Uri $archiveUri -Destination $archive -MinimumBytes 10240 -Label 'WinGet dependencies'
+        New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+        $cached = Get-Item -LiteralPath $archive -ErrorAction SilentlyContinue
+        if ($null -ne $cached -and $cached.Length -gt 10240 -and ((Get-Date) - $cached.LastWriteTime).TotalHours -lt 12) {
+            Write-GSLog -Message ('Using cached WinGet dependency archive (' + ('{0:N1}' -f ($cached.Length / 1MB)) + ' MB).') -Level 'INFO'
+        } else {
+            Download-GSFileWithRetry -Uri $archiveUri -Destination $archive -MinimumBytes 10240 -Label 'WinGet dependencies'
+        }
         New-Item -ItemType Directory -Force -Path $extract | Out-Null
         Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
 
         return [pscustomobject]@{
-            Archive = $archive
+            Archive = ''
+            CachedArchive = $archive
             Root = $extract
         }
     } catch {
+        # A broken cached archive must not be reused.
         Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
         throw
@@ -548,7 +559,7 @@ function Remove-GSAppInstallerDependencyWorkspace {
 
     if ($null -eq $Workspace) { return }
 
-    if ($Workspace.PSObject.Properties.Name -contains 'Archive') {
+    if ($Workspace.PSObject.Properties.Name -contains 'Archive' -and -not [string]::IsNullOrWhiteSpace([string]$Workspace.Archive)) {
         Remove-Item -LiteralPath ([string]$Workspace.Archive) -Force -ErrorAction SilentlyContinue
     }
     if ($Workspace.PSObject.Properties.Name -contains 'Root') {

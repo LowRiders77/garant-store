@@ -102,7 +102,7 @@ $script:wingetPresent=$false;$script:wingetVersion=$null;$script:downloads.Clear
 $script:frameworks=@{}
 $missing=Get-GSPreparationState
 Assert-Equal 'missing winget' 'Missing' $missing.WingetStatus
-Assert-Equal 'missing frameworks listed' 'VCLibs,UIXaml,WindowsAppRuntime' ($missing.MissingFrameworks -join ',')
+Assert-Equal 'missing frameworks listed (UI.Xaml no longer required)' 'VCLibs,WindowsAppRuntime' ($missing.MissingFrameworks -join ',')
 Assert-Throws 'pre-flight blocks missing winget' { Assert-GSPreparedForInstall } '^GSERR:NeedsPreparation:'
 $fresh=Invoke-GSSystemPreparation -AcceptStoreTerms $true
 Assert-Equal 'fresh: winget installed' 'Done' $fresh.Steps[0].Status
@@ -127,4 +127,14 @@ $repair=Repair-GSWinget
 Assert-Equal 'outdated winget redeployed by repair' 1 $script:downloads.Count
 Assert-Equal 'repair verified' 'RepairVerified' $repair.Status
 
+# Store probe: network drop is reported as such and retried; a healthy source answers to `show`.
+$script:wingetPresent=$true;$script:wingetVersion=[version]'1.29.290'
+$script:probeCalls=0
+function Invoke-GSNativeProcess { param([string]$FileName,[string[]]$Arguments,[int]$TimeoutSeconds,[string]$TelemetryKind='None') $script:probeCalls++
+ if($Arguments[0] -ne 'show'){throw 'probe must use winget show'}
+ if($script:probeCalls -lt 3){return [pscustomobject]@{ExitCode=-2147012867;StdOut='WinHttpSendRequest: 12029'+"`n"+'0x80072efd : unknown error';StdErr='';ElapsedSeconds=1;Telemetry=$null}}
+ return [pscustomobject]@{ExitCode=0;StdOut='WhatsApp [9NKSQGP7F2NH]';StdErr='';ElapsedSeconds=1;Telemetry=$null} }
+Assert-Equal 'probe survives two network drops' 'Ok' (Get-GSStoreSourceProbe).Status
+$script:probeCalls=-10
+Assert-Equal 'persistent drop is a network error' 'NetworkError' (Get-GSStoreSourceProbe).Status
 Write-Host 'System preparation checks passed.'

@@ -353,6 +353,9 @@ function ConvertFrom-GSException {
             $status = 'NeedsRepair'
             $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luR2V0INC40LvQuCBBcHAgSW5zdGFsbGVyINC/0L7QstGA0LXQttC00ZHQvS4g0J3QsNC20LzQuNGC0LUgwqvQktC+0YHRgdGC0LDQvdC+0LLQuNGC0YwgV2luR2V0wrsu'))
         }
+        'StoreServiceConsentRequired' {
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0JTQu9GPINGD0YHRgtCw0L3QvtCy0LrQuCDQuNC3IE1pY3Jvc29mdCBTdG9yZSDQvdGD0LbQvdC+INCy0YDQtdC80LXQvdC90L4g0LfQsNC/0YPRgdGC0LjRgtGMINGB0LjRgdGC0LXQvNC90YvQtSDRgdC70YPQttCx0YsgV2luZG93cy4gR2FyYW50IFN0b3JlINC90LjRh9C10LPQviDQvdC1INC80LXQvdGP0Lsg4oCUINC/0L7QtNGC0LLQtdGA0LTQuNGC0LUg0YDQsNC30YDQtdGI0LXQvdC40LUg0LIg0YHQu9C10LTRg9GO0YnQtdC8INC+0LrQvdC1Lg=='))
+        }
         'NeedsPreparation' {
             $status = 'NeedsPreparation'
             $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/QtdGA0LXQtCDRg9GB0YLQsNC90L7QstC60L7QuSDQv9GA0L7Qs9GA0LDQvNC8INC90YPQttC90L4g0L/QvtC00LPQvtGC0L7QstC40YLRjCDRgdC40YHRgtC10LzRgzog0L7QsdC90L7QstC40YLRjCBXaW5HZXQg0Lgg0LrQvtC80L/QvtC90LXQvdGC0YsgTWljcm9zb2Z0IFN0b3JlLiDQndCw0LbQvNC40YLQtSDCq9Cf0L7QtNCz0L7RgtC+0LLQuNGC0Ywg0YHQuNGB0YLQtdC80YPCuy4='))

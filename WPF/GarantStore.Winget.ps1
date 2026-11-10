@@ -741,7 +741,20 @@ function Confirm-GSWingetPackage {
         $arguments += '--accept-source-agreements'
     }
 
-    $capture = Invoke-GSWinget -Arguments $arguments -AllowNonZero -TimeoutSeconds 120
+    # Short connection drops to the Store REST endpoint are common right after
+    # Windows setup (0x80072efd, SSL channel errors); retry before giving up.
+    $capture = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $capture = Invoke-GSWinget -Arguments $arguments -AllowNonZero -TimeoutSeconds 120
+            break
+        } catch {
+            if ($_.Exception.Message -notmatch '^GSERR:NetworkFailure:' -or $attempt -eq 3) { throw }
+            Write-GSLog -Message ('Package lookup network error, retry ' + ($attempt + 1) + '/3: ' + $_.Exception.Message) -Level 'WARN'
+            Write-GSProgress -Stage 'DownloadRetry' -Indeterminate $true -Detail ''
+            Start-Sleep -Seconds (3 * $attempt)
+        }
+    }
     if ($capture.ExitCode -ne 0) {
         throw (New-GSClassifiedException -Code 'PackageNotFound' -Message ('Package verification failed: ' + $Id + ' from ' + $Source))
     }
@@ -775,6 +788,13 @@ function Invoke-GSWingetPackageAction {
     return (Invoke-GSWinget -Arguments $arguments -TimeoutSeconds $TimeoutSeconds)
 }
 
+function Test-GSWingetSourceFailureText {
+    param([AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    # English and Russian WinGet messages ("Failed when searching source").
+    return ($Text -match '(?i)Failed when searching source|\u0421\u0431\u043e\u0439 \u043f\u0440\u0438 \u043f\u043e\u0438\u0441\u043a\u0435 \u0432 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0435')
+}
+
 function Test-GSWingetNoApplicationsFound {
     param(
         [int]$ExitCode,
@@ -782,9 +802,14 @@ function Test-GSWingetNoApplicationsFound {
         [string]$StdErr = ''
     )
 
+    $combined = ([string]$StdOut + [Environment]::NewLine + [string]$StdErr)
+
+    # "Failed when searching source: msstore" + "nothing found" is not proof of
+    # absence: the source did not answer (field: SSL error, WhatsApp installed).
+    if (Test-GSWingetSourceFailureText $combined) { return $false }
+
     if ($ExitCode -eq -1978335212) { return $true }
 
-    $combined = ([string]$StdOut + [Environment]::NewLine + [string]$StdErr)
     if ($combined -match '(?i)0x8A150014') { return $true }
     if ($combined -match '(?i)No app found matching input criteria') { return $true }
     if ($combined -match '(?i)No packages found') { return $true }

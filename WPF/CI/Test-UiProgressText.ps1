@@ -39,6 +39,12 @@ foreach($stage in @('Starting','CheckingState','ResolvingPackage','StoreHandshak
  $x=Format-GSProgressText ([pscustomobject]@{Stage=$stage;Detail=''})
  if($x.Status -cmatch '^[A-Za-z]+$'){throw ('stage not localized: '+$stage)}
 }
+$v=Format-GSProgressText ([pscustomobject]@{Stage='Verifying';Detail='ExactPostVerification'})
+if($v.Detail -match 'Exact|Verification'){throw ('internal token shown: '+$v.Detail)}
+$h=Format-GSProgressText ([pscustomobject]@{Stage='Installing';Detail='SomeInternalStageName'})
+Assert-Equal 'unknown CamelCase hidden' '' $h.Detail
+$k=Format-GSProgressText ([pscustomobject]@{Stage='Installing';Detail='Telegram Desktop'})
+Assert-Equal 'real names kept' 'Telegram Desktop' $k.Detail
 $step=Get-GSPrepareStepText ([pscustomobject]@{Id='winget';Status='Done';Detail=''})
 if($step -notmatch 'WinGet'){throw ('prepare step text: '+$step)}
 $desktop=New-GSRecommendedBundle ([pscustomobject]@{Ready=$true;MissingFrameworks=@();Hardware=[pscustomobject]@{DiscreteGpu='NVIDIA';IsLaptop=$false;RamGB=16;Is64Bit=$true}})
@@ -46,7 +52,7 @@ $ids=@($desktop.Items|ForEach-Object{$_.Id})
 foreach($id in @('Microsoft.VCRedist.2015+.x64','Microsoft.VCRedist.2015+.x86','Microsoft.DotNet.DesktopRuntime.8','Microsoft.EdgeWebView2Runtime','Microsoft.DirectX','7zip.7zip')){if($ids -notcontains $id){throw ('desktop recommendation missing '+$id)}}
 if($ids -contains 'Microsoft.WindowsAppRuntime.1.8'){throw 'runtime recommended although present'}
 if($desktop.Description -notmatch 'NVIDIA'){throw 'GPU driver hint missing'}
-foreach($item in $desktop.Items){if(-not [string]$item.Reason){throw ('reason missing for '+$item.Id)};if([string]$item.Source -ne 'winget'){throw 'unexpected source'}}
+foreach($item in $desktop.Items){if(-not [string]$item.Reason){throw ('reason missing for '+$item.Id)};if([string]$item.Source -notin @('winget','msstore')){throw 'unexpected source'}}
 $laptop=New-GSRecommendedBundle ([pscustomobject]@{Ready=$false;MissingFrameworks=@('WindowsAppRuntime');Hardware=[pscustomobject]@{DiscreteGpu='';IsLaptop=$true;RamGB=8;Is64Bit=$true}})
 $lids=@($laptop.Items|ForEach-Object{$_.Id})
 if($lids -contains 'Microsoft.DirectX'){throw 'DirectX recommended without a discrete GPU'}
@@ -70,4 +76,8 @@ if($null -ne (Get-GSRetryRequest $installOp ([pscustomobject]@{Success=$false;Er
 if($null -ne (Get-GSRetryRequest $installOp ([pscustomobject]@{Success=$true;ErrorCode=''}))){throw 'success must not offer a retry'}
 Assert-Equal 'prepare continued' 'prepare' (Get-GSRetryRequest ([pscustomobject]@{Action='prepare';Request=@{Action='prepare';AgreementConsent=$true}}) ([pscustomobject]@{Success=$false;ErrorCode='PreparationIncomplete'})).Action
 Assert-Equal 'non-network failure' $false (Test-GSNetworkRelatedResult ([pscustomobject]@{Success=$false;ErrorCode='DeploymentFailure';TechnicalMessage='exit 1603'}))
+$nv=New-GSRecommendedBundle ([pscustomobject]@{Ready=$true;MissingFrameworks=@();Hardware=[pscustomobject]@{DiscreteGpu='NVIDIA';IsLaptop=$false;RamGB=16;Is64Bit=$true;GpuVendors=@('10DE');GpuPanels=@()}})
+if(@($nv.Items|Where-Object{$_.Id -eq '9NF8H0H7WMLT' -and $_.Source -eq 'msstore'}).Count -ne 1){throw 'NVIDIA panel must be recommended when missing'}
+$nvOk=New-GSRecommendedBundle ([pscustomobject]@{Ready=$true;MissingFrameworks=@();Hardware=[pscustomobject]@{DiscreteGpu='NVIDIA';IsLaptop=$false;RamGB=16;Is64Bit=$true;GpuVendors=@('10DE');GpuPanels=@('10DE')}})
+if(@($nvOk.Items|Where-Object{$_.Id -eq '9NF8H0H7WMLT'}).Count){throw 'installed NVIDIA panel must not be offered'}
 Write-Host 'UI progress text, recommendation and retry checks passed.'

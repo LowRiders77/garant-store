@@ -335,12 +335,16 @@ function Format-GSProgressText($Progress){
   '^Failed$'{'Ошибка'}
   default{if($stage){$stage}else{'Выполняется...'}}
  }
- $detailText=switch -Regex ($detail){
-  '^(WinGetStoreManifest|StoreEntitlement|MicrosoftStoreBroker|MicrosoftStore|DeliveryOptimization|PreviewReady|StoreProcessCompleted)$'{''}
+ $detailText=@(switch -Regex ($detail){  # first matching rule wins
+  '^(WinGetStoreManifest|StoreEntitlement|MicrosoftStoreBroker|MicrosoftStore|DeliveryOptimization|PreviewReady|StoreProcessCompleted|StoreManifest|ExactStoreState|WinGetCapabilities)$'{''}
+  '^(PostVerification|ExactPostVerification|ExactPackageState)$'{'Проверяем, что программа установилась'}
+  '^StoreRegistration$'{'Windows регистрирует приложение, это до полутора минут'}
   '^WinGetDownload$'{'Загрузка установщика'}
   '^(WinGetInstaller|StoreDeployment)$'{'Установщик работает, это может занять несколько минут'}
+  # Any other internal CamelCase token (no spaces, several capitals) is not for the user.
+  '^[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,}$'{''}
   default{$detail}
- }
+ })[0]
  if($stage -eq 'Downloading' -and $done -gt 0){
   $parts=@()
   $parts+=if($total -gt 0){(Format-GSByteSize $done)+' из '+(Format-GSByteSize $total)}else{'Загружено '+(Format-GSByteSize $done)}
@@ -380,7 +384,7 @@ function Set-GSActivityPulse([bool]$Active){
  }
 }
 function Get-GSPrepareStepText($Step){
- $name=switch([string]$Step.Id){'winget'{'WinGet'}'frameworks'{'Компоненты Windows (VCLibs, UI.Xaml, App Runtime)'}'sources'{'Источник Microsoft Store'}'services'{'Службы Microsoft Store'}default{[string]$Step.Id}}
+ $name=switch([string]$Step.Id){'winget'{'WinGet'}'frameworks'{'Компоненты Windows (VCLibs, Windows App Runtime)'}'sources'{'Источник Microsoft Store'}'services'{'Службы Microsoft Store'}default{[string]$Step.Id}}
  $state=switch([string]$Step.Status){'Ok'{'в порядке'}'Done'{'исправлено'}'Failed'{'не удалось'}'Skipped'{'пропущено'}'Info'{$(if([string]$Step.Detail){'отключены: '+[string]$Step.Detail+' (будут временно включены при установке с вашего согласия)'}else{'в порядке'})}default{[string]$Step.Status}}
  return ('• '+$name+': '+$state)
 }
@@ -427,7 +431,7 @@ function Complete-GSPreparationCheck{
  $script:prepTimer.Stop()
  try{
   if([IO.File]::Exists($c.Result)){
-   $v=Get-Content $c.Result -Raw | ConvertFrom-Json
+   $v=[IO.File]::ReadAllText($c.Result,[Text.Encoding]::UTF8) | ConvertFrom-Json
    $script:prepState=Get-GSUiObjectValue $v 'Data' $null
    Show-GSPreparationBanner $script:prepState
    Add-GSRecommendedBundle $script:prepState
@@ -441,7 +445,7 @@ function Start-GSSystemPreparation($ThenRequest=$null){
  if($null -ne $script:op){return}
  $message='Garant Store подготовит систему к установке программ, строго по порядку:'+"`n`n"+
   '1. Обновит WinGet (App Installer) с серверов Microsoft.'+"`n"+
-  '2. Установит недостающие компоненты: VCLibs, UI.Xaml, Windows App Runtime (без них приложения Store, например WhatsApp, могут не запускаться).'+"`n"+
+  '2. Установит недостающие компоненты: VCLibs, Windows App Runtime (без них приложения Store, например WhatsApp, могут не запускаться).'+"`n"+
   '3. Обновит источники и проверит Microsoft Store.'+"`n`n"+
   'Всё скачивается только с серверов Microsoft, подпись каждого пакета проверяется. Займёт 2–10 минут.'+"`n"+
   'Нажимая «Да», вы принимаете условия источника Microsoft Store (https://aka.ms/microsoft-store-terms-of-transaction).'+"`n`n"+'Начать?'
@@ -453,7 +457,13 @@ function Start-GSSystemPreparation($ThenRequest=$null){
 function Get-GSDiagnosticsModelName{
  # Same name as the "Моя система" report; quick CIM fallback if it was not opened.
  try{if($script:gsSystemCache -and $script:gsSystemCache.Profile){$n=Get-GSSystemDisplayName $script:gsSystemCache.Profile;if($n){return [string]$n}}}catch{}
- try{$cs=Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 5 -ErrorAction Stop;return (Format-GSModelName ([string]$cs.Manufacturer) ([string]$cs.Model) '' '' ([Environment]::MachineName))}catch{return [Environment]::MachineName}
+ # Same inputs as the report: no-name desktops are named by their board (QIYIDA X79), not "Компьютер GARANT-PC".
+ try{
+  $cs=Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 5 -ErrorAction Stop
+  $board=$null;try{$board=Get-CimInstance Win32_BaseBoard -OperationTimeoutSec 5 -ErrorAction Stop|Select-Object -First 1}catch{}
+  $boardText=if($board){(@([string]$board.Manufacturer,[string]$board.Product)|Where-Object{$_ -and -not (Test-GSPlaceholderText $_)}) -join ' '}else{''}
+  return (Format-GSModelName ([string]$cs.Manufacturer) ([string]$cs.Model) '' $boardText ([Environment]::MachineName))
+ }catch{return [Environment]::MachineName}
 }
 function Add-GSDriverDiagnosticsToZip([string]$ZipPath){
  # The driver engine log lives behind its elevated local server; it is only
@@ -704,10 +714,15 @@ function New-GSRecommendedBundle($State){
  & $add @{Name='WebView2 Runtime';Id='Microsoft.EdgeWebView2Runtime';Source='winget';Default=$true;Reason='Встроенный браузер для WhatsApp, Teams, Office и других приложений'}
  if($missing -contains 'WindowsAppRuntime'){& $add @{Name='Windows App Runtime 1.8';Id='Microsoft.WindowsAppRuntime.1.8';Source='winget';Default=$true;Reason='Не установлен: без него новые приложения Store (например, WhatsApp) могут не запускаться'}}
  if($gpu){& $add @{Name='DirectX (End-User Runtime)';Id='Microsoft.DirectX';Source='winget';Default=$true;Reason='Найдена видеокарта '+$gpu+': старые игры требуют компоненты DirectX 9–11'}}
+ # Фирменная панель видеокарты — пункт в меню рабочего стола (ПКМ). С драйвером из Windows Update её нет.
+ $vendors=@(Get-GSUiObjectValue $hardware 'GpuVendors' @())
+ $panels=@(Get-GSUiObjectValue $hardware 'GpuPanels' @())
+ if($vendors -contains '10DE' -and $panels -notcontains '10DE'){& $add @{Name='Панель управления NVIDIA';Id='9NF8H0H7WMLT';Source='msstore';Default=$true;Reason='Пункт «Панель управления NVIDIA» в меню рабочего стола (ПКМ) — официальное приложение NVIDIA'}}
+ if($vendors -contains '8086' -and $vendors -notcontains '10DE' -and $vendors -notcontains '1002' -and $panels -notcontains '8086'){& $add @{Name='Intel Graphics Command Center';Id='9PLFNLNT3G5G';Source='msstore';Default=$true;Reason='Официальная панель настроек графики Intel'}}
  & $add @{Name='CrystalDiskInfo';Id='CrystalDewWorld.CrystalDiskInfo';Source='winget';Default=$isLaptop;Reason=$(if($isLaptop){'Покажет здоровье SSD ноутбука и предупредит заранее'}else{'Покажет здоровье дисков и предупредит заранее'})}
  & $add @{Name='7-Zip';Id='7zip.7zip';Source='winget';Default=$true;Reason='Открывает ZIP, RAR, 7z — встроенного архиватора Windows не хватает'}
  $notes=@()
- if($gpu){$notes+='Драйвер видеокарты '+$gpu+' ставьте в разделе «Драйверы».'}
+ if($gpu){$notes+='Официальный драйвер видеокарты '+$gpu+' — в разделе «Драйверы».'}
  if(-not [bool](Get-GSUiObjectValue $State 'Ready' $true)){$notes+='Сначала нажмите «Подготовить систему».'}
  $description='Подобрано по этому компьютеру. Уже установленное будет отмечено автоматически.'+$(if($notes.Count){' '+($notes -join ' ')}else{''})
  return [pscustomobject]@{Id='recommended';Title='Рекомендуем для этого ПК';CardDescription='Подобрано по железу этого компьютера';Description=$description;Items=@($items.ToArray())}
@@ -868,7 +883,7 @@ $tick.Add_Tick({
  try{
   Read-GSOperationLogDelta $o
   if([IO.File]::Exists($o.Progress)){
-   $p=Get-Content $o.Progress -Raw | ConvertFrom-Json
+   $p=[IO.File]::ReadAllText($o.Progress,[Text.Encoding]::UTF8) | ConvertFrom-Json
    $progressText=Format-GSProgressText $p
    $Status.Text=$progressText.Status;$Detail.Text=$progressText.Detail
    $percentValue=Get-GSUiObjectValue $p 'Percent' $null
@@ -877,7 +892,7 @@ $tick.Add_Tick({
    if($o.Action -eq 'bundle'){Format-GSBundleProgress $p $progressText}
   }
   if($o.Action -eq 'search' -and -not $o.SeenPreview -and [IO.File]::Exists($o.Preview)){
-   $v=Get-Content $o.Preview -Raw | ConvertFrom-Json
+   $v=[IO.File]::ReadAllText($o.Preview,[Text.Encoding]::UTF8) | ConvertFrom-Json
    $previewRows=Get-GSUiObjectValue $v 'Results' $null
    if($null -ne $previewRows){Load-Results $previewRows;$o.SeenPreview=$true}
   }
@@ -887,7 +902,7 @@ $tick.Add_Tick({
  try{Read-GSOperationLogDelta $o}catch{}
  try{
   if([IO.File]::Exists($o.Result)){
-   $v=Get-Content $o.Result -Raw | ConvertFrom-Json
+   $v=[IO.File]::ReadAllText($o.Result,[Text.Encoding]::UTF8) | ConvertFrom-Json
    $resultErrorCode=[string](Get-GSUiObjectValue $v 'ErrorCode' '')
    $resultStatus=[string](Get-GSUiObjectValue $v 'Status' '')
    $resultMessage=[string](Get-GSUiObjectValue $v 'Message' 'Операция завершилась без подробного сообщения.')
@@ -927,7 +942,7 @@ $tick.Add_Tick({
      $Detail.Text='Часть шагов не выполнена. Подробности — в журнале операций.'
      Show-GSPreparationBanner $prepAfter
      $prepareFollowUp='report'
-     $script:prepReport=('Подготовка системы завершилась не полностью:'+"`n`n"+($stepLines -join "`n")+"`n`n"+'Проверьте подключение к интернету и повторите. Если ошибка повторяется, нажмите «Диагностика» и пришлите архив мастеру.')
+     $script:prepReport=('Подготовка системы завершилась не полностью:'+"`n`n"+($stepLines -join "`n")+"`n`n"+'Проверьте подключение к интернету и повторите. Если ошибка повторяется, нажмите «Собрать диагностику» и пришлите архив мастеру.')
     }
     $script:afterPrepare=$null
    }

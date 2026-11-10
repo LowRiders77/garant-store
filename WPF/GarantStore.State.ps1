@@ -274,6 +274,8 @@ function Resolve-GSPackageState {
 $script:GSKnownPresence = @{
     'microsoft.edgewebview2runtime' = 'WebView2'
     '9nksqgp7f2nh' = 'Appx:5319275A.WhatsAppDesktop'
+    '9nf8h0h7wmlt' = 'Appx:NVIDIACorp.NVIDIAControlPanel'
+    '9plfnlnt3g5g' = 'Appx:AppUp.IntelGraphicsExperience'
 }
 
 function Get-GSKnownPackagePresence {
@@ -320,14 +322,17 @@ function Get-GSExactPackageState {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
         [Parameter(Mandatory=$true)][string]$Source,
-        [bool]$AcceptAgreements = $false
+        [bool]$AcceptAgreements = $false,
+        # Post-install check: presence is enough, skip the slow WinGet query
+        # for the available version (it took 40+ s against msstore in the field).
+        [switch]$PresenceOnly
     )
     $known = $null
     try { $known = Get-GSKnownPackagePresence -Id $Id } catch { $known = $null }
     if ($null -ne $known) {
         $listed = $null
         # Absence is authoritative and cheap; WinGet is asked only for the available version.
-        if ([bool]$known.Installed) { try { $listed = Get-GSExactPackageStateFromWinget -Id $Id -Source $Source -AcceptAgreements $AcceptAgreements } catch { $listed = $null } }
+        if ([bool]$known.Installed -and -not $PresenceOnly) { try { $listed = Get-GSExactPackageStateFromWinget -Id $Id -Source $Source -AcceptAgreements $AcceptAgreements } catch { $listed = $null } }
         $available = if ($null -ne $listed) { [string]$listed.AvailableVersion } else { '' }
         $resolved = Resolve-GSKnownPresenceState -Known $known -AvailableVersion $available
         Write-GSLog -Message ('Known-package state for ' + $Id + ': ' + $resolved.Status + ' ' + $resolved.InstalledVersion + ' via ' + $resolved.StateOrigin + '; winget said ' + $(if ($listed) { [string]$listed.Status + ' ' + [string]$listed.InstalledVersion } else { 'n/a' })) -Level 'INFO'

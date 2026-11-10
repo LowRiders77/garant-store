@@ -79,7 +79,8 @@ function Invoke-GSStorePackagePipeline {
     [void](Ensure-GSAgreementCapabilities -Command $command)
 
     $attempt = 0
-    $maxAttempts = 1
+    # One automatic retry when the Store download drops (0x80d03805 etc.).
+    $maxAttempts = 2
     $actionResult = $null
 
     while ($attempt -lt $maxAttempts) {
@@ -127,6 +128,13 @@ function Invoke-GSStorePackagePipeline {
                 throw (New-GSClassifiedException -Code 'StoreDeploymentTimeout' -Message $detail)
             }
 
+            if ($failureMessage -match '^GSERR:NetworkFailure:' -and $attempt -lt $maxAttempts) {
+                Write-GSLog -Message ('Store download interrupted, retrying once: ' + $failureMessage) -Level 'WARN'
+                Write-GSProgress -Stage 'DownloadRetry' -Indeterminate $true -Detail ''
+                Start-Sleep -Seconds 10
+                continue
+            }
+
             if ($failureMessage -match '^GSERR:(PackageAgreementsRequired|SourceAgreementsRequired):') {
                 throw (New-GSClassifiedException -Code 'AgreementHandshakeFailed' -Message ('Agreement consent was explicit and WinGet accept flags were supplied, but WinGet still refused the handshake. ' + $failureMessage))
             }
@@ -136,9 +144,9 @@ function Invoke-GSStorePackagePipeline {
     }
 
     Clear-GSInventoryCache
-    Write-GSProgress -Stage 'Verifying' -Indeterminate $true -Detail 'ExactPostVerification'
+    Write-GSProgress -Stage 'Verifying' -Indeterminate $true -Detail 'PostVerification'
 
-    $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true
+    $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true -PresenceOnly
     # Microsoft Store finishes registration in the background: WinGet already
     # printed "installed" while the package was not listed yet (field: WhatsApp).
     # Re-check for up to ~90 s before calling it a failure.
@@ -147,7 +155,7 @@ function Invoke-GSStorePackagePipeline {
         Write-GSProgress -Stage 'Verifying' -Indeterminate $true -Detail 'StoreRegistration'
         Start-Sleep -Seconds 6
         Clear-GSInventoryCache
-        $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true
+        $after = Get-GSExactPackageState -Id $Id -Source 'msstore' -AcceptAgreements $true -PresenceOnly
     }
     Write-GSLog -Message ('Store post-state=' + $after.Status + '; installed=' + $after.InstalledVersion + '; available=' + $after.AvailableVersion) -Level 'INFO'
 

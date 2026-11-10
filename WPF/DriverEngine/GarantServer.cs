@@ -215,6 +215,7 @@ namespace GarantPO {
      AddToZip(z,Path.Combine(root,"Core.ps1"),"Engine/Core.ps1");
      AddToZip(z,Path.Combine(root,"Worker.ps1"),"Engine/Worker.ps1");
      AddToZip(z,Path.Combine(root,"Catalog.ps1"),"Engine/Catalog.ps1");
+     AddToZip(z,Path.Combine(root,"VendorGpu.ps1"),"Engine/VendorGpu.ps1");
      AddToZip(z,Path.Combine(root,"DRP_Known_Links.csv"),"Engine/DRP_Known_Links.csv");
      AddToZip(z,Path.Combine(root,"Updates.ps1"),"Engine/Updates.ps1");
      AddToZip(z,Path.Combine(root,"UpdateCatalog.ps1"),"Engine/UpdateCatalog.ps1");
