@@ -710,6 +710,12 @@ try {
      if(-not $profile.details.operatingSystem -or -not $profile.details.processors){throw 'System JSON is missing detailed OS or CPU measurements.'}
     }elseif($extension -eq 'html'){
      if($body -notmatch '<!doctype html>' -or $body -notmatch '@media print' -or $body -notmatch "href='#section-" -or $body -match '(?i)(?:src|href)=["'']https?://'){throw 'HTML report is missing local navigation or print styles, or includes an external resource.'}
+     # The first page must be the detailed tile summary collected on this real Windows,
+     # not the short fallback used when the collector fails.
+     if($body -notmatch 'class="tiles"' -or $body -match [regex]::Unescape('\u041f\u043e\u0434\u0440\u043e\u0431\u043d\u0430\u044f \u0441\u0432\u043e\u0434\u043a\u0430 \u043d\u0435 \u0441\u043e\u0431\u0440\u0430\u043d\u0430') -or $body -notmatch [regex]::Escape([regex]::Unescape('\u0412\u0438\u0434\u0435\u043e\u043a\u0430\u0440\u0442\u0430 (GPU)'))){
+      $note=[regex]::Match($body,'class="tile note".*?<div class="v">(.*?)</div>').Groups[1].Value
+      throw ('HTML report has no detailed hardware summary. '+$note)
+     }
     }elseif($body -notmatch '(?m)^Garant Store' -or $body -notmatch '(?m)^BuildNumber: \d+'){throw 'TXT report lacks a measured Windows build.'}
     Remove-Item -LiteralPath $reportPath -Force
     $metrics.Add([pscustomobject]@{Check='system-export';Format=$extension;Result=$true})

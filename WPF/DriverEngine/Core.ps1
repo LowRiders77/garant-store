@@ -10,6 +10,7 @@ $script:LibraryDir = if ([string]::IsNullOrWhiteSpace($env:GARANT_PO_LIBRARY_DIR
 # which the WPF client starts as an administrators-only folder. DownloadDir,
 # DriverDir and LibraryDir point at the user's Downloads and receive copies.
 $script:EngineDownloadDir = Join-Path $script:DataRoot 'Downloads'
+. (Join-Path $script:Root 'VendorGpu.ps1')
 $script:EngineLibraryDir = Join-Path $script:DataRoot 'Libraries'
 $script:StagingDir = Join-Path $script:DataRoot 'Staging'
 foreach ($d in @($script:StateDir,$script:LogDir,$script:DownloadDir,$script:CacheDir,$script:DriverDir,$script:LibraryDir,$script:EngineDownloadDir,$script:EngineLibraryDir,$script:StagingDir)) { if (!(Test-Path $d)) {New-Item -ItemType Directory -Path $d -Force | Out-Null} }
@@ -30,11 +31,15 @@ function Load-JsonFile([string]$path, $fallback) {
 function Get-RemainingSelectedProblemDevices($Inventory,[string[]]$InstanceIds) {
   # Inventory rows document a working installed driver; only actionable PnP
   # problem states count as unresolved after an install/rescan.
+  # Scripts that dot-source UpdateCatalog.ps1 run under Set-StrictMode, where a
+  # row without instanceId/kind (or a null row) would throw instead of being skipped.
   $problemKinds=@('Missing','Issue','GPU')
   return @($Inventory|Where-Object{
-    $id=[string]$_.instanceId
-    $kind=[string]$_.kind
-    $InstanceIds -contains $id -and $problemKinds -contains $kind
+    if($null -eq $_){return $false}
+    $idProperty=$_.PSObject.Properties['instanceId'];$kindProperty=$_.PSObject.Properties['kind']
+    $id=if($idProperty){[string]$idProperty.Value}else{''}
+    $kind=if($kindProperty){[string]$kindProperty.Value}else{''}
+    $id -and $InstanceIds -contains $id -and $problemKinds -contains $kind
   })
 }
 function Test-GSDownloadResponse([int]$ExitCode,[string]$HttpStatus,[string]$ContentType,[long]$Bytes,[bool]$IsHtml,[long]$ExpectedBytes=0,[long]$ExistingBytes=0,[string]$ContentRange='') {
@@ -68,6 +73,15 @@ function Get-TargetDevices {
   foreach ($d in $all) {
     $code = [int]$d.ConfigManagerErrorCode
     $isGpu = ($d.Name -match '(?i)Microsoft Basic Display|Базовый видеоадаптер|Стандартный VGA|Standard VGA Graphics|Video Controller \(VGA Compatible\)')
+    # NVIDIA / AMD с драйвером из Windows Update работают, но без фирменной панели
+    # (нет пункта в меню рабочего стола). Такой адаптер тоже предлагается к установке
+    # официального драйвера производителя.
+    $vendorPanelMissing = ''
+    if ($code -eq 0 -and !$isGpu -and [string]$d.PNPClass -eq 'Display' -and [string]$d.PNPDeviceID -match '^PCI\\VEN_(10DE|1002)&') {
+      $vendor = $Matches[1].ToUpperInvariant()
+      try { if (-not (Get-GSVendorPanelState -Vendor $vendor)) { $vendorPanelMissing = $vendor } } catch {}
+    }
+    if ($vendorPanelMissing) { $isGpu = $true }
     if ($code -eq 0 -and !$isGpu) {continue}
     if ([string]::IsNullOrWhiteSpace($d.PNPDeviceID)) {continue}
     $ids = @($d.HardwareID | Where-Object {![string]::IsNullOrWhiteSpace([string]$_)} | ForEach-Object {[string]$_})
@@ -77,7 +91,7 @@ function Get-TargetDevices {
     $key = if ($ids.Count) { [string]$ids[0] } else { [string]$d.PNPDeviceID }
     $kind = if ($isGpu) {'GPU'} elseif ($code -eq 28) {'Missing'} else {'Issue'}
     $description = if ([string]::IsNullOrWhiteSpace($d.Name)) {'Неизвестное устройство'} else {[string]$d.Name}
-    $items.Add([pscustomobject]@{instanceId=[string]$d.PNPDeviceID;name=$description; kind=$kind; code=$code; reason=$(if($code -eq 28){'Драйвер не установлен'}elseif($isGpu){'Используется базовый видеодрайвер'}else{'Код состояния устройства: '+$code}); hardwareIds=@($ids); hwid=$key; category=[string]$d.PNPClass; vendor=$(if($key -match 'VEN_([0-9A-Fa-f]{4})'){$Matches[1].ToUpper()}else{''})})
+    $items.Add([pscustomobject]@{instanceId=[string]$d.PNPDeviceID;name=$description; kind=$kind; code=$code; reason=$(if($code -eq 28){'Драйвер не установлен'}elseif($vendorPanelMissing -eq '10DE'){'Драйвер без панели NVIDIA (из Windows Update). Нужен официальный драйвер NVIDIA'}elseif($vendorPanelMissing -eq '1002'){'Драйвер без AMD Software (из Windows Update). Нужен официальный драйвер AMD'}elseif($isGpu){'Используется базовый видеодрайвер'}else{'Код состояния устройства: '+$code}); hardwareIds=@($ids); hwid=$key; category=[string]$d.PNPClass; vendor=$(if($key -match 'VEN_([0-9A-Fa-f]{4})'){$Matches[1].ToUpper()}else{''})})
   }
   return @($items.ToArray() | Sort-Object @{Expression={if($_.kind -eq 'GPU'){0}else{1}}},name)
 }

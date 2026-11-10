@@ -343,7 +343,7 @@ function Invoke-GSDriverAction([string]$Action){
 
 function Save-GSDriverDiagnostics {
  try{
-  $dialog=New-Object Microsoft.Win32.SaveFileDialog;$dialog.Filter='ZIP архив (*.zip)|*.zip';$dialog.FileName='Garant-PO-Diagnostics.zip'
+  $dialog=New-Object Microsoft.Win32.SaveFileDialog;$dialog.Filter='ZIP архив (*.zip)|*.zip';$dialog.FileName=('Garant-PO-Diagnostics - '+(ConvertTo-GSSafeFileName (Get-GSDiagnosticsModelName))+' - '+(Get-Date -Format 'yyyy-MM-dd HH-mm')+'.zip')
   if($dialog.ShowDialog() -ne $true){return}
   $bytes=Invoke-GSDriverApi -Path '/api/diagnostics'
   [IO.File]::WriteAllBytes($dialog.FileName,[byte[]]$bytes)

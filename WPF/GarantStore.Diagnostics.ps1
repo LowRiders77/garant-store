@@ -122,7 +122,18 @@ function New-GSDiagnosticsArchive {
     $doctor = Get-GSDoctorData
     Write-GSDoctorLog -Doctor $doctor
 
-    $zip = Join-Path ([string]$ctx.Root) ('diagnostics-{0}.zip' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    # One file the user can send as is: "Garant-Diagnostics - ASUS Vivobook Go E1504FA - 2026-11-10 14-30.zip" on the Desktop.
+    $systemSummary = $null
+    $modelName = ''
+    try { $systemSummary = New-GSSystemSummary (Get-GSSummaryRaw); $modelName = [string]$systemSummary.Model } catch {
+        Write-GSLog -Message ('System summary for diagnostics failed: ' + $_.Exception.Message) -Level 'WARN'
+    }
+    if (-not $modelName) {
+        try { $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop; $modelName = Format-GSModelName ([string]$cs.Manufacturer) ([string]$cs.Model) '' '' ([Environment]::MachineName) } catch { $modelName = [Environment]::MachineName }
+    }
+    $outputDir = [Environment]::GetFolderPath('Desktop')
+    if (-not $outputDir -or -not (Test-Path -LiteralPath $outputDir)) { $outputDir = [string]$ctx.Root }
+    $zip = Join-Path $outputDir ('Garant-Diagnostics - ' + (ConvertTo-GSSafeFileName $modelName) + ' - ' + (Get-Date -Format 'yyyy-MM-dd HH-mm') + '.zip')
     $stage = Join-Path ([IO.Path]::GetTempPath()) ('GarantStore-diag-' + [Guid]::NewGuid().ToString('N'))
 
     try {
@@ -153,6 +164,7 @@ function New-GSDiagnosticsArchive {
             Created = (Get-Date -Format o)
             OperationId = [string]$ctx.OperationId
             Doctor = $doctor
+            SystemSummary = $systemSummary
         }
 
         $summaryJson = ConvertTo-Json -InputObject $summary -Depth 12
@@ -167,11 +179,23 @@ function New-GSDiagnosticsArchive {
             Remove-Item -LiteralPath $zip -Force
         }
 
-        Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+        # Entries are added one by one: CreateFromDirectory on .NET Framework (PowerShell 5.1) still writes '\'.
+        $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $prefix = $stage.TrimEnd('\','/').Length + 1
+            foreach ($file in @(Get-ChildItem -LiteralPath $stage -Recurse -File)) {
+                $entryName = $file.FullName.Substring($prefix).Replace('\','/')
+                [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName, [IO.Compression.CompressionLevel]::Optimal)
+            }
+        } finally {
+            $archive.Dispose()
+        }
         Write-GSLog -Message ('Diagnostics ZIP created: ' + $zip) -Level 'INFO'
 
         return [pscustomobject]@{
             Path = $zip
+            Model = $modelName
             Doctor = $doctor
         }
     } finally {

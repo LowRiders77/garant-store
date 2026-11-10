@@ -21,6 +21,44 @@ function Get-CurrentTargets {
   Save-JsonFile $script:DeviceFile $all
   return $all
 }
+function Get-GSWebText([string]$url,[string]$referer='') {
+  # Короткий запрос справочника (NVIDIA, AMD, pci.ids). pci.ids кэшируется на 7 дней.
+  $curl=Join-Path $env:WINDIR 'System32\curl.exe'; if (!(Test-Path $curl)) {$curl='curl.exe'}
+  $cacheFile=$null
+  if ($url -like '*pci.ids') {
+    $cacheFile=Join-Path $script:StateDir 'pci.ids'
+    if ((Test-Path -LiteralPath $cacheFile) -and ((Get-Date)-(Get-Item -LiteralPath $cacheFile).LastWriteTime).TotalDays -lt 7) {return [IO.File]::ReadAllText($cacheFile,[Text.Encoding]::UTF8)}
+  }
+  $tmp=Join-Path $script:StateDir ('web-'+[guid]::NewGuid().ToString('N')+'.tmp')
+  try {
+    $args=@('--location','--fail','--silent','--show-error','--retry','2','--retry-delay','2','--connect-timeout','15','--max-time','90','--user-agent','"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"','--output',('"'+$tmp+'"'))
+    if ($referer) {$args+=@('--referer',('"'+$referer+'"'))}
+    $proxy=Get-ProxyUrl; if ($proxy) {$args+=@('--proxy',('"'+$proxy+'"'))}
+    $args+=('"'+$url+'"')
+    $p=Start-Process -FilePath $curl -ArgumentList $args -PassThru -Wait -WindowStyle Hidden
+    if ($p.ExitCode -ne 0 -or !(Test-Path -LiteralPath $tmp)) {Log ('Запрос не выполнен ('+$p.ExitCode+'): '+$url);return $null}
+    $text=[IO.File]::ReadAllText($tmp,[Text.Encoding]::UTF8)
+    if ($cacheFile -and $text.Length -gt 100000) {[IO.File]::WriteAllText($cacheFile,$text,[Text.UTF8Encoding]::new($false))}
+    return $text
+  } catch {Log ('Запрос не выполнен: '+$_.Exception.Message);return $null}
+  finally {Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}
+}
+function Test-GSVendorSignature([string]$path,[string]$kind) {
+  $pattern=if($kind -eq 'NvidiaGPU'){'(?i)O=NVIDIA Corporation'}elseif($kind -eq 'AmdGPU'){'(?i)O=Advanced Micro Devices'}else{'(?i)Intel'}
+  try{$sig=Get-AuthenticodeSignature -LiteralPath $path}catch{Log ('Подпись не проверена: '+$_.Exception.Message);return $false}
+  if($sig.Status -ne 'Valid' -or [string]$sig.SignerCertificate.Subject -notmatch $pattern){Log ('ОШИБКА: подпись производителя не подтверждена: '+[string]$sig.Status+' '+[string]$sig.SignerCertificate.Subject);return $false}
+  return $true
+}
+function Install-GSVendorPanel([string]$vendor) {
+  # Панель управления из Microsoft Store, если официальный пакет её не поставил.
+  $id=if($vendor -eq '10DE'){'9NF8H0H7WMLT'}else{''}
+  if(-not $id){return}
+  if(Get-GSVendorPanelState -Vendor $vendor){Log 'Фирменная панель уже установлена';return}
+  $winget=Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+  if(!(Test-Path -LiteralPath $winget)){Log 'WinGet не найден: панель NVIDIA можно поставить из Garant Store (набор «Рекомендуем»)';return}
+  Write-Status 'Установка' 'Панель управления NVIDIA из Microsoft Store'
+  try{$p=Start-Process -FilePath $winget -ArgumentList @('install','--id',$id,'--source','msstore','--accept-package-agreements','--accept-source-agreements','--silent','--disable-interactivity') -Wait -PassThru -WindowStyle Hidden;Log ('Панель NVIDIA: winget exit '+$p.ExitCode)}catch{Log ('Панель NVIDIA не установлена: '+$_.Exception.Message)}
+}
 function Test-Archive([string]$path) {
   if (!(Test-Path $path)) {return $false}
   if ((Get-Item $path).Length -lt 500) {return $false}
@@ -49,7 +87,7 @@ function Get-ExpectedDownloadLength([string]$headerPath,[long]$originalSize) {
   } catch {}
   return [long]0
 }
-function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long]$knownSize=0) {
+function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long]$knownSize=0,[string]$referer='https://driverpack.io/') {
   $curl=Join-Path $env:WINDIR 'System32\curl.exe'
   if (!(Test-Path $curl)) {$curl='curl.exe'}
   $stderr=Join-Path $script:StateDir 'curl_stderr.txt'
@@ -74,7 +112,7 @@ function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long
     Write-Status 'Загрузка' "Попытка $attempt/$maxAttempts — $($script:Task.current)"
     Log "Загрузка: попытка $attempt/$maxAttempts; на диске $existing байт"
     foreach ($p in @($stderr,$stdout,$headers)) {Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}
-    $args=@('--location','--fail','--silent','--show-error','--retry',$curlRetries,'--retry-delay','2','--connect-timeout',$(if($isHtml){'8'}else{'20'}),'--max-time',$(if($isHtml){'15'}else{'7200'}),'--speed-limit','1024','--speed-time','120','--user-agent','"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"','--header','"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"','--header','"Accept-Language: en-US,en;q=0.9,ru;q=0.8"','--referer','https://driverpack.io/','--dump-header',('"'+$headers+'"'),'--write-out','HTTP_CODE=%{http_code};CONTENT_TYPE=%{content_type};SIZE=%{size_download}','--output',('"'+$destination+'"'))
+    $args=@('--location','--fail','--silent','--show-error','--retry',$curlRetries,'--retry-delay','2','--connect-timeout',$(if($isHtml){'8'}else{'20'}),'--max-time',$(if($isHtml){'15'}else{'7200'}),'--speed-limit','1024','--speed-time','120','--user-agent','"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"','--header','"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"','--header','"Accept-Language: en-US,en;q=0.9,ru;q=0.8"','--referer',$referer,'--dump-header',('"'+$headers+'"'),'--write-out','HTTP_CODE=%{http_code};CONTENT_TYPE=%{content_type};SIZE=%{size_download}','--output',('"'+$destination+'"'))
     if($isHtml){$args+=@('--header','"Sec-Fetch-Dest: document"','--header','"Sec-Fetch-Mode: navigate"','--header','"Sec-Fetch-Site: none"')}
     if ($proxy) {$args+=@('--proxy',('"'+$proxy+'"'))}
     # HTML catalog pages are metadata, never resumable files. Reusing an old
@@ -218,6 +256,7 @@ function Run-Install($packages,$install,$original) {
     $isValid=$false
     if (Test-Path $path) {
       if ($pkg.kind -eq 'Zip') {$isValid=Test-Archive $path}
+      elseif ($pkg.kind -in @('NvidiaGPU','AmdGPU')) {$isValid=Test-GSVendorSignature $path $pkg.kind}
       else {
         if ((Get-Item $path).Length -gt 100MB) {$sha=(Get-FileHash $path -Algorithm SHA512).Hash.ToLowerInvariant();$isValid=($sha -eq $pkg.sha512)}
       }
@@ -225,7 +264,9 @@ function Run-Install($packages,$install,$original) {
     if (!$isValid) {
       $partial=$path+'.partial'
       # Keep .partial on interruption and resume from the previous byte on the next run.
-      if (!(Curl-Fetch $pkg.url $partial $false ([long]$pkg.expectedBytes))) {$script:Task.errors++;continue}
+      $pkgReferer=if($pkg.PSObject.Properties['referer'] -and $pkg.referer){[string]$pkg.referer}else{'https://driverpack.io/'}
+      if (!(Curl-Fetch $pkg.url $partial $false ([long]$pkg.expectedBytes) $pkgReferer)) {$script:Task.errors++;continue}
+      if ($pkg.kind -in @('NvidiaGPU','AmdGPU') -and !(Test-GSVendorSignature $partial $pkg.kind)) {$script:Task.errors++;Remove-Item $partial -Force;continue}
       if ($pkg.kind -eq 'Zip' -and !(Test-Archive $partial)) { Log 'Ответ не является ZIP-архивом';$script:Task.errors++;Remove-Item $partial -Force;continue }
       if ($pkg.kind -eq 'IntelGPU') {
         $sha=(Get-FileHash $partial -Algorithm SHA512).Hash.ToLowerInvariant()
@@ -245,6 +286,24 @@ function Run-Install($packages,$install,$original) {
     Save-JsonFile $script:StatusFile $script:Task
     if (!$install) {continue}
     $newTargets=@(Get-CurrentTargets)
+    if ($pkg.kind -eq 'NvidiaGPU') {
+      Write-Status 'Установка' ('Официальный драйвер NVIDIA '+$pkg.version+' — несколько минут, экран может мигнуть')
+      Log 'Запуск официального установщика NVIDIA (-s -noreboot -noeula)'
+      $exe=Start-Process -FilePath $path -ArgumentList @('-s','-noreboot','-noeula') -Wait -PassThru -WindowStyle Hidden
+      Log "NVIDIA installer exit code: $($exe.ExitCode)"
+      if ($exe.ExitCode -in @(1,3010)) {$script:Task.needReboot=$true}
+      elseif ($exe.ExitCode -ne 0) {$script:Task.errors++;Log 'Установщик NVIDIA вернул ошибку'}
+      $installed=@(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object {[string]$_.PNPDeviceID -match '^PCI\\VEN_10DE'} | ForEach-Object {[string]$_.DriverVersion})
+      Log ('Версия драйвера NVIDIA в системе: '+($installed -join ', ')+'; ожидалась '+$pkg.version)
+      Install-GSVendorPanel '10DE'
+      continue
+    }
+    if ($pkg.kind -eq 'AmdGPU') {
+      Write-Status 'Установка' 'Запущен официальный установщик AMD — продолжите в его окне'
+      Log 'Запуск официального установщика AMD Software (Auto-Detect). Установщик AMD интерактивный: выбор и установка — в его окне.'
+      try {Start-Process -FilePath $path | Out-Null} catch {Log ('Установщик AMD не запустился: '+$_.Exception.Message);$script:Task.errors++}
+      continue
+    }
     if ($pkg.kind -eq 'IntelGPU') {
       $matchingGpu=@($newTargets | Where-Object {$_.kind -eq 'GPU' -and @(@(Get-NormalIds $_) | Where-Object {$pkg.ids -contains $_}).Count -gt 0})
       if ($matchingGpu.Count -eq 0) {continue}
