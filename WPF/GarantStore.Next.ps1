@@ -79,6 +79,7 @@ if(Test-Path -LiteralPath $buildInfoPath){try{$script:buildInfo=Get-Content -Lit
     <Button x:Name="GoComponents" Tag="M2,3 H18 V17 H2 Z M10,3 V17 M2,10 H18" Content="Компоненты Windows" Style="{StaticResource NavButton}"/>
     <Button x:Name="GoSystem" Tag="M2,3 H18 V14 H2 Z M10,14 V18 M6,18 H14" Content="Моя система" AutomationProperties.AutomationId="OpenSystemInformation" Style="{StaticResource NavButton}"/>
     <Button x:Name="Doctor" Tag="M2,10 H6 L8,5 L11,15 L14,10 H18" Content="Собрать диагностику" AutomationProperties.AutomationId="CollectDiagnostics" ToolTip="Один архив с журналами для мастера — сохраняется на рабочий стол" Style="{StaticResource NavButton}"/>
+    <Button x:Name="PrepareNav" AutomationProperties.AutomationId="PrepareSystemNav" Tag="M3,17 L9,11 M9,11 L7,9 L11,5 L15,9 L11,13 Z M13,3 L17,7" Content="Подготовить систему" ToolTip="WinGet, компоненты Windows и Microsoft Store — по порядку. Можно запускать в любой момент" Style="{StaticResource NavButton}"/>
     <Button x:Name="Repair" Tag="M17,8 A7,7 0 1 0 17,13 M17,3 V8 H12" Content="Восстановить WinGet" Style="{StaticResource NavButton}"/>
     <Button x:Name="AboutButton" Tag="M18,10 A8,8 0 1 1 2,10 A8,8 0 1 1 18,10 M10,9 V14 M10,6 V6.5" Content="О нас" Style="{StaticResource NavButton}" Margin="0,16,0,0"/>
    </StackPanel></ScrollViewer>
@@ -146,7 +147,7 @@ $script:uiDispatcher.add_UnhandledException({param($sender,$e)
  $e.Handled=$true
  try{$Status.Text='Ошибка интерфейса';$Detail.Text='Подробности записаны в диагностический журнал.'}catch{}
 })
-foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress','PrepBanner','PrepBannerText','PrepareButton','ActivityDot','RetryOperation')) {
+foreach($name in @('GoCatalog','GoBundles','BundlesView','BundleBack','BundleTitle','BundleSubtitle','BundleCards','BundleItems','BundleInstall','BundleToggle','BundleSummary','GoResults','GoLog','GoDrivers','GoComponents','GoSystem','Doctor','Repair','AboutButton','BrandMarkSmall','Stop','Heading','Query','Source','Search','CatalogView','ResultsView','LogView','Categories','Catalog','ResultCount','Results','Install','Selection','Log','Status','Detail','Progress','PrepBanner','PrepBannerText','PrepareButton','ActivityDot','RetryOperation','PrepareNav')) {
  Set-Variable -Scope Script -Name $name -Value $win.FindName($name)
 }
 $iconPath=Join-Path $root 'Assets\GarantStoreMark.ico'
@@ -1074,6 +1075,7 @@ $Stop.Add_Click({
  Stop-GSOperationProcessTree $o.Process
 })
 $PrepareButton.Add_Click({Start-GSSystemPreparation})
+$PrepareNav.Add_Click({Start-GSSystemPreparation})
 $script:prepCheck=$null;$script:prepState=$null;$script:afterPrepare=$null;$script:prepReport=''
 $script:prepTimer=New-Object Windows.Threading.DispatcherTimer
 $script:prepTimer.Interval=[TimeSpan]::FromMilliseconds(1000)
