@@ -1,4 +1,4 @@
-# Field failures from the 10 Nov 2026 diagnostics:
+﻿# Field failures from the 10 Nov 2026 diagnostics:
 #  - Store download cut off (0x80d03805) and SSL/WinHTTP errors were shown as
 #    "WinGet error" / "package not found" with no way to continue;
 #  - WinGet listed "Windows Desktop Runtime 8.0.33" under the WebView2 ID, so a
