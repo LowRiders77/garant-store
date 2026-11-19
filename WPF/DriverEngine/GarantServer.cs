@@ -18,6 +18,12 @@ namespace GarantPO {
   private readonly HttpListener listener = new HttpListener();
   private readonly object gate = new object(), logGate = new object(), sizeGate = new object();
   private Process worker;
+  // Cancel is idempotent: the first request writes cancel.flag and starts a
+  // watchdog; repeats only report the state (field: 28 CANCEL lines in 7 s
+  // while a Windows Update download ignored the flag).
+  private DateTime cancelRequestedUtc=DateTime.MinValue;
+  private int cancelPid=-1;
+  private int cancelRepeats=0;
   private bool stopping = false;
   private long lastSize = 0;
   private DateTime lastSizeTime = DateTime.UtcNow;
@@ -80,6 +86,35 @@ namespace GarantPO {
     }
    } finally { stopping=true; try{listener.Close();}catch{} if(!String.IsNullOrWhiteSpace(bootstrapFile)){try{File.Delete(bootstrapFile);}catch{}} Log("SERVER STOP"); }
   }
+  private void CancelWatchdog(int pid) {
+   // The worker stops itself at the next safe point. If it does not within
+   // 20 s (blocking download), it is stopped; during driver installation it is
+   // allowed to finish the current package (up to 10 min) to avoid a half-installed driver.
+   DateTime started=DateTime.UtcNow;
+   while(true){
+    Thread.Sleep(2000);
+    Process p;lock(gate){p=worker;}
+    bool alive=false;try{alive=p!=null&&p.Id==pid&&!p.HasExited;}catch{}
+    if(!alive){Log("CANCEL completed pid="+pid);return;}
+    double seconds=(DateTime.UtcNow-started).TotalSeconds;
+    if(seconds<20)continue;
+    Dictionary<string,object> st=Dict(ParseFile(Path.Combine(state,"status.json"),new Dictionary<string,object>()));
+    string phase=S(Field(st,"phase",""));
+    bool installing=phase.IndexOf("Установка",StringComparison.OrdinalIgnoreCase)>=0;
+    if(installing && seconds<600)continue;
+    try{
+     Process tk=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"taskkill.exe"),"/PID "+pid+" /T /F"){UseShellExecute=false,CreateNoWindow=true});
+     if(tk!=null)tk.WaitForExit(15000);
+    }catch(Exception e){Log("CANCEL stop failed: "+e.Message);}
+    try{
+     st["running"]=false;st["phase"]="Отменено";
+     st["message"]="Операция остановлена: процесс не дошёл до безопасной точки за "+(int)seconds+" с. Частично скачанные файлы сохранены.";
+     File.WriteAllText(Path.Combine(state,"status.json"),Serializer().Serialize(st),new UTF8Encoding(false));
+    }catch{}
+    Log("CANCEL forced stop pid="+pid+" after "+(int)seconds+"s phase="+phase);
+    return;
+   }
+  }
   private void Log(string message) {
    lock(logGate) {
     try { File.AppendAllText(Path.Combine(logs,"Garant-PO-Server.log"),"["+DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff")+"] "+message+Environment.NewLine, Encoding.UTF8); } catch {}
@@ -133,6 +168,11 @@ namespace GarantPO {
     status["message"]="Процесс завершился. Проверь журнал и запусти сканирование.";
    }
    if(alive) status["running"]=true;
+   lock(gate){
+    bool cancelling=alive && cancelRequestedUtc!=DateTime.MinValue && p!=null && cancelPid==p.Id;
+    status["cancelRequested"]=cancelling;
+    status["cancelSeconds"]=cancelling?(int)(DateTime.UtcNow-cancelRequestedUtc).TotalSeconds:0;
+   }
    // Driver progress is reported by the worker. Disk size remains a fallback if its JSON update is delayed.
    string current=Path.GetFileName(S(Field(status,"current","")));
    if(B(Field(status,"running",false)) && current.Length>0 && S(Field(status,"phase",""))=="Загрузка") {
@@ -215,6 +255,7 @@ namespace GarantPO {
      AddToZip(z,Path.Combine(root,"Core.ps1"),"Engine/Core.ps1");
      AddToZip(z,Path.Combine(root,"Worker.ps1"),"Engine/Worker.ps1");
      AddToZip(z,Path.Combine(root,"Catalog.ps1"),"Engine/Catalog.ps1");
+     AddToZip(z,Path.Combine(root,"VendorGpu.ps1"),"Engine/VendorGpu.ps1");
      AddToZip(z,Path.Combine(root,"DRP_Known_Links.csv"),"Engine/DRP_Known_Links.csv");
      AddToZip(z,Path.Combine(root,"Updates.ps1"),"Engine/Updates.ps1");
      AddToZip(z,Path.Combine(root,"UpdateCatalog.ps1"),"Engine/UpdateCatalog.ps1");
@@ -302,6 +343,7 @@ namespace GarantPO {
        if(arr!=null && !(arr is string))foreach(object item in arr){if(ids.Count<100 && S(item).Length<=1024)ids.Add(S(item));}
        File.WriteAllText(Path.Combine(state,"selection.json"),Serializer().Serialize(ids),Encoding.UTF8);
        try{File.Delete(Path.Combine(state,"cancel.flag"));}catch{}
+       cancelRequestedUtc=DateTime.MinValue;cancelPid=-1;cancelRepeats=0;
        // Preserve the completed inventory for maintenance actions. Only a new scan
        // invalidates the previous result set.
        if(action=="scan" || action=="update-scan") {try{File.Delete(Path.Combine(state,"scan.flag"));}catch{}}
@@ -340,8 +382,22 @@ namespace GarantPO {
       JSON(c,new{ok=true,action=action,pid=pid},200);
      }
      else if(path=="/api/cancel"){
-      lock(gate){if(worker==null||worker.HasExited){JSON(c,new{error="Нет работающей операции"},409);return;}File.WriteAllText(Path.Combine(state,"cancel.flag"),"stop");}
-      JSON(c,new{ok=true,message="Остановка запрошена"},200);Log("CANCEL");
+      int pidToWatch;bool repeat;double waited;
+      lock(gate){
+       if(worker==null||worker.HasExited){JSON(c,new{ok=true,state="idle",message="Нет работающей операции"},200);return;}
+       repeat=(cancelRequestedUtc!=DateTime.MinValue && cancelPid==worker.Id);
+       if(!repeat){File.WriteAllText(Path.Combine(state,"cancel.flag"),"stop");cancelRequestedUtc=DateTime.UtcNow;cancelPid=worker.Id;cancelRepeats=0;}
+       else cancelRepeats++;
+       pidToWatch=worker.Id;waited=(DateTime.UtcNow-cancelRequestedUtc).TotalSeconds;
+      }
+      if(repeat){
+       if(cancelRepeats==1)Log("CANCEL repeated request ignored (already stopping) pid="+pidToWatch);
+       JSON(c,new{ok=true,state="cancelling",seconds=(int)waited,message="Остановка уже выполняется"},200);
+      } else {
+       Log("CANCEL pid="+pidToWatch);
+       ThreadPool.QueueUserWorkItem(delegate{CancelWatchdog(pidToWatch);});
+       JSON(c,new{ok=true,state="cancelling",seconds=0,message="Остановка запрошена"},200);
+      }
      }
      else if(path=="/api/ui-event"){
       object payload=Serializer().DeserializeObject(Body(c));

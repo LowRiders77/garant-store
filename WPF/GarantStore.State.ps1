@@ -266,7 +266,82 @@ function Resolve-GSPackageState {
     }
 }
 
+# Local, authoritative presence checks for packages WinGet misreports.
+# Field (Nov 2026): `winget list --id Microsoft.EdgeWebView2Runtime` returned
+# the "Windows Desktop Runtime 8.0.33" row, so a successful WebView2 install
+# failed verification and was offered again as an update; Store WhatsApp was
+# installed but not yet visible to `winget list --source msstore`.
+$script:GSKnownPresence = @{
+    'microsoft.edgewebview2runtime' = 'WebView2'
+    '9nksqgp7f2nh' = 'Appx:5319275A.WhatsAppDesktop'
+    '9nf8h0h7wmlt' = 'Appx:NVIDIACorp.NVIDIAControlPanel'
+    '9plfnlnt3g5g' = 'Appx:AppUp.IntelGraphicsExperience'
+}
+
+function Get-GSKnownPackagePresence {
+    param([Parameter(Mandatory=$true)][string]$Id)
+    $key = $Id.ToLowerInvariant()
+    if (-not $script:GSKnownPresence.ContainsKey($key)) { return $null }
+    $kind = [string]$script:GSKnownPresence[$key]
+    if ($kind -eq 'WebView2') {
+        $client = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+        $best = $null
+        foreach ($root in @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients','HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients','HKCU:\Software\Microsoft\EdgeUpdate\Clients')) {
+            try {
+                $pv = [string](Get-ItemProperty -LiteralPath ($root + '\' + $client) -Name 'pv' -ErrorAction Stop).pv
+                $version = $null
+                if ($pv -and $pv -ne '0.0.0.0') { try { $version = [version]$pv } catch {} }
+                if ($null -ne $version -and ($null -eq $best -or $version -gt $best)) { $best = $version }
+            } catch {}
+        }
+        return [pscustomobject]@{ Installed = ($null -ne $best); Version = $(if ($best) { [string]$best } else { '' }); Origin = 'registry-edgeupdate' }
+    }
+    if ($kind -like 'Appx:*') {
+        $name = $kind.Substring(5)
+        $package = $null
+        try { $package = @(Get-AppxPackage -Name $name -ErrorAction Stop | Sort-Object Version -Descending) | Select-Object -First 1 } catch { return $null }
+        return [pscustomobject]@{ Installed = ($null -ne $package); Version = $(if ($package) { [string]$package.Version } else { '' }); Origin = 'appx-package' }
+    }
+    return $null
+}
+
+function Resolve-GSKnownPresenceState {
+    # Known presence wins over a WinGet list row for these packages.
+    param([Parameter(Mandatory=$true)][object]$Known,[AllowEmptyString()][string]$AvailableVersion = '')
+    if (-not [bool]$Known.Installed) {
+        return [pscustomobject]@{ Status = 'NotInstalled'; InstalledVersion = ''; AvailableVersion = $AvailableVersion; StateOrigin = [string]$Known.Origin + '-absent' }
+    }
+    $status = 'Installed'
+    if (-not [string]::IsNullOrWhiteSpace($AvailableVersion) -and (Compare-GSVersionValues -Installed ([string]$Known.Version) -Available $AvailableVersion) -eq 'AvailableNewer') {
+        $status = 'UpdateAvailable'
+    }
+    return [pscustomobject]@{ Status = $status; InstalledVersion = [string]$Known.Version; AvailableVersion = $(if ($status -eq 'UpdateAvailable') { $AvailableVersion } else { '' }); StateOrigin = [string]$Known.Origin }
+}
+
 function Get-GSExactPackageState {
+    param(
+        [Parameter(Mandatory=$true)][string]$Id,
+        [Parameter(Mandatory=$true)][string]$Source,
+        [bool]$AcceptAgreements = $false,
+        # Post-install check: presence is enough, skip the slow WinGet query
+        # for the available version (it took 40+ s against msstore in the field).
+        [switch]$PresenceOnly
+    )
+    $known = $null
+    try { $known = Get-GSKnownPackagePresence -Id $Id } catch { $known = $null }
+    if ($null -ne $known) {
+        $listed = $null
+        # Absence is authoritative and cheap; WinGet is asked only for the available version.
+        if ([bool]$known.Installed -and -not $PresenceOnly) { try { $listed = Get-GSExactPackageStateFromWinget -Id $Id -Source $Source -AcceptAgreements $AcceptAgreements } catch { $listed = $null } }
+        $available = if ($null -ne $listed) { [string]$listed.AvailableVersion } else { '' }
+        $resolved = Resolve-GSKnownPresenceState -Known $known -AvailableVersion $available
+        Write-GSLog -Message ('Known-package state for ' + $Id + ': ' + $resolved.Status + ' ' + $resolved.InstalledVersion + ' via ' + $resolved.StateOrigin + '; winget said ' + $(if ($listed) { [string]$listed.Status + ' ' + [string]$listed.InstalledVersion } else { 'n/a' })) -Level 'INFO'
+        return $resolved
+    }
+    return (Get-GSExactPackageStateFromWinget -Id $Id -Source $Source -AcceptAgreements $AcceptAgreements)
+}
+
+function Get-GSExactPackageStateFromWinget {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
         [Parameter(Mandatory=$true)][string]$Source,
@@ -511,6 +586,13 @@ function Add-GSPackageStates {
             }
         } else {
             $resolvedState = Resolve-GSPackageState -SearchRow $row -Inventory $inventory
+        }
+
+        $known = $null
+        try { $known = Get-GSKnownPackagePresence -Id ([string]$row.Id) } catch { $known = $null }
+        if ($null -ne $known) {
+            $availableForKnown = if ([string]$resolvedState.AvailableVersion) { [string]$resolvedState.AvailableVersion } else { [string]$row.Version }
+            $resolvedState = Resolve-GSKnownPresenceState -Known $known -AvailableVersion $availableForKnown
         }
 
         [void]$output.Add([pscustomobject]@{

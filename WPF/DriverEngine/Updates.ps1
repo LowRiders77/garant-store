@@ -88,19 +88,28 @@ try{
   Update-Status 'Установка обновлений' ('Устанавливаем драйверы: '+$installCollection.Count)
   $installer=$session.CreateUpdateInstaller();$installer.Updates=$installCollection;$installResult=$installer.Install()
   $script:UpdateTask.needReboot=[bool]$installResult.RebootRequired
-  if([int]$installResult.ResultCode -notin @(2,3)){throw ('Windows Update завершил установку с ошибкой. Код результата: '+[int]$installResult.ResultCode)}
-  $script:UpdateTask.downloaded=$installCollection.Count;$script:UpdateTask.finished=$installCollection.Count
   if($script:UpdateTask.needReboot){Update-Log 'Для завершения установки требуется перезагрузка.'}
+  # Judge each update on its own: the batch result code is "failed" as soon as
+  # one driver is refused, even when every other driver installed fine.
+  $installedCount=0;$notNeededCount=0;$failures=New-Object System.Collections.Generic.List[string]
   for($i=0;$i -lt $installCollection.Count;$i++){
    $one=$installResult.GetUpdateResult($i)
-   if([int]$one.ResultCode -notin @(2,3)){$script:UpdateTask.errors++;Update-Log ('Ошибка обновления '+[string]$installCollection.Item($i).Title+'; код '+[int]$one.ResultCode)}
-   else{Update-Log ('Установлено: '+[string]$installCollection.Item($i).Title)}
+   $title=[string]$installCollection.Item($i).Title
+   $hresult=0;try{$hresult=[int]$one.HResult}catch{}
+   switch(Get-GSWuaInstallOutcome ([int]$one.ResultCode) $hresult){
+    'Installed'{$installedCount++;Update-Log ('Установлено: '+$title)}
+    'NotNeeded'{$notNeededCount++;Update-Log ('Не требуется: уже установлен такой же или более подходящий драйвер — '+$title)}
+    default{$script:UpdateTask.errors++;$failures.Add($title+' ('+(Format-GSHResult $hresult)+')');Update-Log ('Ошибка обновления '+$title+'; код результата '+[int]$one.ResultCode+'; '+(Format-GSHResult $hresult))}
+   }
   }
+  $script:UpdateTask.downloaded=$installedCount;$script:UpdateTask.finished=$installedCount+$notNeededCount
   $remaining=@(Get-WindowsDriverUpdates -StatusCallback {param($p,$m) Update-Status $p $m} -LogCallback {param($m) Update-Log $m})
   Save-JsonFile $script:DeviceFile $remaining
   $script:UpdateTask.scanned=$true;$script:UpdateTask.remaining=$remaining.Count;$script:UpdateTask.percent=100
-  if($remaining.Count -eq 0){Update-Status 'Готово' 'Выбранные обновления установлены. Windows Update больше не предлагает обновлений драйверов.'}
-  else{Update-Status 'Готово' ('Установка завершена. Осталось предложений Windows Update: '+$remaining.Count)}
+  $summary='Установлено: '+$installedCount+'; не требуется: '+$notNeededCount+'; не удалось: '+$failures.Count+'.'
+  if($remaining.Count){$summary+=' Windows Update ещё предлагает драйверов: '+$remaining.Count+' (это не ошибка).'}
+  if($failures.Count){$script:UpdateTask.lastError='Не удалось установить: '+($failures -join '; ');Update-Status 'Завершено с ошибками' ($summary+' '+$script:UpdateTask.lastError)}
+  else{Update-Status 'Готово' $summary}
   }
  }
 }catch [System.OperationCanceledException]{

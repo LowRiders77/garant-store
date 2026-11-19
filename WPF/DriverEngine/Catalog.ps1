@@ -40,7 +40,11 @@ function Get-DynamicDrpLinks($dev) {
     if(!$useCache){
       Remove-Item -LiteralPath $html,$cacheInfo -Force -ErrorAction SilentlyContinue
       $tempHtml=$html+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
-      if(!(Curl-Fetch $url $tempHtml $true)) {Remove-Item -LiteralPath $tempHtml -Force -ErrorAction SilentlyContinue;Log "DRP-каталог не вернул проверенную HTML-страницу (URL-specific cache, HTTP 200) для ID $key; проверяю следующий совместимый ID.";continue}
+      if(!(Curl-Fetch $url $tempHtml $true)) {
+        Remove-Item -LiteralPath $tempHtml -Force -ErrorAction SilentlyContinue
+        # Source refused or unreachable: other IDs of this device would get the same answer.
+        if($script:LastFetchOutcome -in @('SourceUnavailable','NetworkError')){if($dev.instanceId){$script:GSDeviceOutcome[[string]$dev.instanceId]=$script:LastFetchOutcome};return @()}
+        Log "DRP-каталог не вернул проверенную HTML-страницу (URL-specific cache, HTTP 200) для ID $key; проверяю следующий совместимый ID.";continue}
       try{
         $bodyText=[System.IO.File]::ReadAllText($tempHtml)
         if($bodyText.Length -lt 100 -or $bodyText -match '(?is)^\s*(\{|\[).*?(error|blocked|captcha)') {throw 'Ответ каталога пустой или похож на страницу ошибки.'}
@@ -60,6 +64,7 @@ function Get-DynamicDrpLinks($dev) {
     if($found.Count){Log "DRP нашёл $($found.Count) ZIP-пакет(а) по ID $key";return @($found.ToArray())}
   }
   Log 'В каталоге DRP не найден ZIP ни для одного Hardware ID устройства.'
+  if($dev.instanceId -and -not $script:GSDeviceOutcome.ContainsKey([string]$dev.instanceId)){$script:GSDeviceOutcome[[string]$dev.instanceId]='NotFound'}
   return @()
 }
 function Get-Packages($devices,[switch]$KnownOnly) {
@@ -69,6 +74,20 @@ function Get-Packages($devices,[switch]$KnownOnly) {
   $res=New-Object System.Collections.Generic.List[object]
   foreach ($d in $devices) {
     $keys = @(Get-NormalIds $d)
+    # NVIDIA / AMD: только официальный пакет производителя (с фирменной панелью).
+    if ($d.kind -eq 'GPU' -and -not $KnownOnly -and @($keys | Where-Object {$_ -match '^PCI\\VEN_(10DE|1002)&DEV_'}).Count) {
+      $fetch = { param($u,$r) Get-GSWebText $u $r }
+      $vendorPkg = $null
+      try {
+        if (@($keys | Where-Object {$_ -match '^PCI\\VEN_10DE&DEV_'}).Count) { $vendorPkg = Resolve-GSNvidiaOfficialDriver -Device $d -Fetch $fetch -IsNotebook (Test-GSNotebook) }
+        else { $vendorPkg = Resolve-GSAmdOfficialDriver -Device $d -Fetch $fetch }
+      } catch { Log ('Официальный видеодрайвер не определён: ' + $_.Exception.Message) }
+      if ($null -ne $vendorPkg) {
+        if (!(@($res | Where-Object {$_.url -eq $vendorPkg.url}).Count)) { $res.Add($vendorPkg) }
+        continue
+      }
+      Log 'Официальный пакет не найден — используем Windows Update / DRP'
+    }
     # Intel Alder Lake UP3 integrated GPU: official Intel executable, no unrelated OEM subsys driver.
     if ($d.kind -eq 'GPU' -and $keys -contains 'PCI\VEN_8086&DEV_46A8') {
       $url='https://downloadmirror.intel.com/929468/gfx_win_101.7092.exe'

@@ -76,7 +76,7 @@ function Invoke-GSPackageInstall {
     [void](Invoke-GSWingetPackageAction -Command $command -Id $Id -Source $Source -AgreementConsent $true -Silent)
 
     Clear-GSInventoryCache
-    $after = Get-GSExactPackageState -Id $Id -Source $Source -AcceptAgreements $true
+    $after = Get-GSExactPackageState -Id $Id -Source $Source -AcceptAgreements $true -PresenceOnly
 
     if ($after.Status -eq 'NotInstalled' -or $after.Status -eq 'Unknown' -or $after.Status -eq 'UpdateAvailable') {
         throw (New-GSClassifiedException -Code 'DeploymentFailure' -Message 'Post-action verification failed for the selected package.')

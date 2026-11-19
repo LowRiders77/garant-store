@@ -299,6 +299,15 @@ function Write-GSResultFile {
     }
 }
 
+function Test-GSNetworkFailureText {
+    # Download / connection failures reported by WinGet, Microsoft Store and
+    # Delivery Optimization. Field: 0x80d03805 (Store download made no progress
+    # after the connection dropped), 0x8a15003b with a WinHTTP SSL channel error.
+    param([AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return ($Text -match '(?i)0x80d0[0-9a-f]{4}|0x80072ee[0-9a-f]|0x80072ef[0-9a-f]|0x80072f[0-9a-f]{2}|0x800704cf|0x8a15003b|WINHTTP_CALLBACK_STATUS|SSL Error|0x80190[0-9a-f]{3}|0x8019019|InternetOpenUrl')
+}
+
 function New-GSClassifiedException {
     param(
         [Parameter(Mandatory=$true)][string]$Code,
@@ -313,12 +322,14 @@ function ConvertFrom-GSException {
     $message = [string]$Exception.Message
     $code = 'UnknownError'
     $status = 'Failed'
-    $userMessage = 'Operation failed.'
+    $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J7Qv9C10YDQsNGG0LjRjyDQvdC1INCy0YvQv9C+0LvQvdC10L3QsC4='))
 
     $explicitError = [regex]::Match($message,'^GSERR:([A-Za-z0-9_]+):(.*)$')
     if ($explicitError.Success) {
         $code = [string]$explicitError.Groups[1].Value
         $message = ([string]$explicitError.Groups[2].Value).Trim()
+    } elseif ($message -match '(?i)0x8a15005e|server certificate did not match') {
+        $code = 'NeedsPreparation'
     } elseif ($message -match '(?i)0xC0000005|ACCESS_VIOLATION|WINGET_ACCESS_VIOLATION') {
         $code = 'AccessViolation'
     } elseif ($message -match '(?i)0x80073CF3|dependency') {
@@ -329,6 +340,8 @@ function ConvertFrom-GSException {
         $code = 'SignatureInvalid'
     } elseif ($message -match '(?i)source.*unavailable|source.*failed|source.*not found') {
         $code = 'SourceUnavailable'
+    } elseif (Test-GSNetworkFailureText $message) {
+        $code = 'NetworkFailure'
     } elseif ($message -match '(?i)network|dns|tls|resolve.*host|timed out|timeout|connection') {
         $code = 'NetworkFailure'
     } elseif ($message -match '(?i)package.*not found|no package found') {
@@ -338,33 +351,40 @@ function ConvertFrom-GSException {
     switch ($code) {
         'NeedsRepair' {
             $status = 'NeedsRepair'
-            $userMessage = 'WinGet or App Installer requires repair.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luR2V0INC40LvQuCBBcHAgSW5zdGFsbGVyINC/0L7QstGA0LXQttC00ZHQvS4g0J3QsNC20LzQuNGC0LUgwqvQktC+0YHRgdGC0LDQvdC+0LLQuNGC0YwgV2luR2V0wrsu'))
+        }
+        'StoreServiceConsentRequired' {
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0JTQu9GPINGD0YHRgtCw0L3QvtCy0LrQuCDQuNC3IE1pY3Jvc29mdCBTdG9yZSDQvdGD0LbQvdC+INCy0YDQtdC80LXQvdC90L4g0LfQsNC/0YPRgdGC0LjRgtGMINGB0LjRgdGC0LXQvNC90YvQtSDRgdC70YPQttCx0YsgV2luZG93cy4gR2FyYW50IFN0b3JlINC90LjRh9C10LPQviDQvdC1INC80LXQvdGP0Lsg4oCUINC/0L7QtNGC0LLQtdGA0LTQuNGC0LUg0YDQsNC30YDQtdGI0LXQvdC40LUg0LIg0YHQu9C10LTRg9GO0YnQtdC8INC+0LrQvdC1Lg=='))
+        }
+        'NeedsPreparation' {
+            $status = 'NeedsPreparation'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/QtdGA0LXQtCDRg9GB0YLQsNC90L7QstC60L7QuSDQv9GA0L7Qs9GA0LDQvNC8INC90YPQttC90L4g0L/QvtC00LPQvtGC0L7QstC40YLRjCDRgdC40YHRgtC10LzRgzog0L7QsdC90L7QstC40YLRjCBXaW5HZXQg0Lgg0LrQvtC80L/QvtC90LXQvdGC0YsgTWljcm9zb2Z0IFN0b3JlLiDQndCw0LbQvNC40YLQtSDCq9Cf0L7QtNCz0L7RgtC+0LLQuNGC0Ywg0YHQuNGB0YLQtdC80YPCuy4='))
         }
         'AccessViolation' {
             $status = 'NeedsRepair'
-            $userMessage = 'WinGet is damaged or unstable and should be repaired.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luR2V0INGA0LDQsdC+0YLQsNC10YIg0L3QtdGB0YLQsNCx0LjQu9GM0L3Qvi4g0J3QsNC20LzQuNGC0LUgwqvQktC+0YHRgdGC0LDQvdC+0LLQuNGC0YwgV2luR2V0wrsu'))
         }
         'DependencyMissing' {
             $status = 'NeedsDependency'
-            $userMessage = 'A required Windows package dependency is missing.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J3QtSDRhdCy0LDRgtCw0LXRgiDRgdC40YHRgtC10LzQvdC+0LPQviDQutC+0LzQv9C+0L3QtdC90YLQsCBXaW5kb3dzLiDQndCw0LbQvNC40YLQtSDCq9Cf0L7QtNCz0L7RgtC+0LLQuNGC0Ywg0YHQuNGB0YLQtdC80YPCuyDQuNC70LggwqvQktC+0YHRgdGC0LDQvdC+0LLQuNGC0YwgV2luR2V0wrsu'))
         }
         'PermissionDenied' {
-            $userMessage = 'The operation requires additional permissions.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0JTQu9GPINGN0YLQvtC5INC+0L/QtdGA0LDRhtC40Lgg0L3Rg9C20L3RiyDQv9GA0LDQstCwINCw0LTQvNC40L3QuNGB0YLRgNCw0YLQvtGA0LAu'))
         }
         'SignatureInvalid' {
-            $userMessage = 'The package signature could not be verified.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J3QtSDRg9C00LDQu9C+0YHRjCDQv9GA0L7QstC10YDQuNGC0Ywg0YbQuNGE0YDQvtCy0YPRjiDQv9C+0LTQv9C40YHRjCDQv9Cw0LrQtdGC0LAuINCj0YHRgtCw0L3QvtCy0LrQsCDQvtGB0YLQsNC90L7QstC70LXQvdCwLg=='))
         }
         'SourceUnavailable' {
             $status = 'SourceUnavailable'
-            $userMessage = 'The selected package source is unavailable.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0JjRgdGC0L7Rh9C90LjQuiDQv9GA0L7Qs9GA0LDQvNC8INGB0LXQudGH0LDRgSDQvdC10LTQvtGB0YLRg9C/0LXQvS4g0J/QvtCy0YLQvtGA0LjRgtC1INC/0L7Qv9GL0YLQutGDINC/0L7Qt9C20LUu'))
         }
         'NetworkFailure' {
             $status = 'NetworkUnavailable'
-            $userMessage = 'The network connection or remote endpoint is unavailable.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J3QtdGCINGB0LLRj9C30Lgg0YEg0YHQtdGA0LLQtdGA0LDQvNC4IE1pY3Jvc29mdDog0LfQsNCz0YDRg9C30LrQsCDQv9GA0LXRgNCy0LDQu9Cw0YHRjC4g0J/RgNC+0LLQtdGA0YzRgtC1INC40L3RgtC10YDQvdC10YIg4oCUINC/0L7RgdC70LUg0LLQvtGB0YHRgtCw0L3QvtCy0LvQtdC90LjRjyDRgdCy0Y/Qt9C4IEdhcmFudCBTdG9yZSDQv9GA0LXQtNC70L7QttC40YIg0L/RgNC+0LTQvtC70LbQuNGC0Ywu'))
         }
         'StoreServiceDisabled' {
             $status = 'NeedsRepair'
-            $userMessage = 'A Windows service required by Microsoft Store is disabled or cannot start.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0KHQu9GD0LbQsdCwIFdpbmRvd3MsINC90YPQttC90LDRjyBNaWNyb3NvZnQgU3RvcmUsINC+0YLQutC70Y7Rh9C10L3QsCDQuNC70Lgg0L3QtSDQt9Cw0L/Rg9GB0LrQsNC10YLRgdGPLg=='))
         }
         'StorePolicyBlocked' {
             $status = 'BlockedByPolicy'
@@ -376,42 +396,42 @@ function ConvertFrom-GSException {
         }
         'PackageAgreementsRequired' {
             $status = 'AgreementsRequired'
-            $userMessage = 'The package requires agreement acceptance before installation.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/QtdGA0LXQtCDRg9GB0YLQsNC90L7QstC60L7QuSDQvdGD0LbQvdC+INC/0YDQuNC90Y/RgtGMINGB0L7Qs9C70LDRiNC10L3QuNC1INC/0LDQutC10YLQsC4='))
         }
         'SourceAgreementsRequired' {
             $status = 'AgreementsRequired'
-            $userMessage = 'The package source requires agreement acceptance before use.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/QtdGA0LXQtCDQuNGB0L/QvtC70YzQt9C+0LLQsNC90LjQtdC8INC90YPQttC90L4g0L/RgNC40L3Rj9GC0Ywg0YPRgdC70L7QstC40Y8g0LjRgdGC0L7Rh9C90LjQutCwLg=='))
         }
         'AgreementHandshakeFailed' {
             $status = 'AgreementsRequired'
-            $userMessage = 'WinGet refused agreements even after explicit consent was supplied.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luR2V0INC90LUg0L/RgNC40L3Rj9C7INGB0L7Qs9C70LDRgdC40LUg0YEg0YPRgdC70L7QstC40Y/QvNC4LiDQn9C+0L/RgNC+0LHRg9C50YLQtSDCq9CS0L7RgdGB0YLQsNC90L7QstC40YLRjCBXaW5HZXTCuy4='))
         }
         'PackageNotFound' {
-            $userMessage = 'The selected package could not be found.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/RgNC+0LPRgNCw0LzQvNCwINC90LUg0L3QsNC50LTQtdC90LAg0LIg0LjRgdGC0L7Rh9C90LjQutC1Lg=='))
         }
         'NoApplicationsFound' {
             $status = 'NotInstalled'
-            $userMessage = 'The selected package is not installed.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J/RgNC+0LPRgNCw0LzQvNCwINC90LUg0YPRgdGC0LDQvdC+0LLQu9C10L3QsC4='))
         }
         'UnsupportedArchitecture' {
             $status = 'Unsupported'
-            $userMessage = 'The current architecture is not supported.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0K3RgtCwINCw0YDRhdC40YLQtdC60YLRg9GA0LAg0L/RgNC+0YbQtdGB0YHQvtGA0LAg0L3QtSDQv9C+0LTQtNC10YDQttC40LLQsNC10YLRgdGPLg=='))
         }
         'DeploymentFailure' {
-            $userMessage = 'Windows could not deploy the package.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luZG93cyDQvdC1INGB0LzQvtCz0LvQsCDRg9GB0YLQsNC90L7QstC40YLRjCDQv9Cw0LrQtdGCLiDQn9C+0LTRgNC+0LHQvdC+0YHRgtC4IOKAlCDQsiDQttGD0YDQvdCw0LvQtSDQvtC/0LXRgNCw0YbQuNC5Lg=='))
         }
         'VerificationInconclusive' {
             $status = 'VerificationInconclusive'
-            $userMessage = 'Windows accepted the operation, but Garant Store could not independently verify the final state.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luZG93cyDQv9GA0LjQvdGP0LvQsCDQvtC/0LXRgNCw0YbQuNGOLCDQvdC+IEdhcmFudCBTdG9yZSDQvdC1INGB0LzQvtCzINC/0L7QtNGC0LLQtdGA0LTQuNGC0Ywg0YDQtdC30YPQu9GM0YLQsNGCLg=='))
         }
         'WingetError' {
-            $userMessage = 'WinGet returned an error. See the technical log for details.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('V2luR2V0INCy0LXRgNC90YPQuyDQvtGI0LjQsdC60YMuINCf0L7QtNGA0L7QsdC90L7RgdGC0Lgg4oCUINCyINC20YPRgNC90LDQu9C1INC+0L/QtdGA0LDRhtC40Lku'))
         }
         'InternalError' {
-            $userMessage = 'Garant Store encountered an internal error.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0JLQvdGD0YLRgNC10L3QvdGP0Y8g0L7RiNC40LHQutCwIEdhcmFudCBTdG9yZS4g0KHQvtCx0LXRgNC40YLQtSDQtNC40LDQs9C90L7RgdGC0LjQutGDINC4INC+0YLQv9GA0LDQstGM0YLQtSDQvNCw0YHRgtC10YDRgy4='))
         }
         default {
-            $userMessage = 'Operation failed. See the log for technical details.'
+            $userMessage = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('0J7Qv9C10YDQsNGG0LjRjyDQvdC1INCy0YvQv9C+0LvQvdC10L3QsC4g0J/QvtC00YDQvtCx0L3QvtGB0YLQuCDigJQg0LIg0LbRg9GA0L3QsNC70LUg0L7Qv9C10YDQsNGG0LjQuS4='))
         }
     }
 

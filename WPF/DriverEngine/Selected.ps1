@@ -28,7 +28,7 @@ function Invoke-SelectedChild([string]$scriptName,[string]$parameter,[string]$va
  $script:SelectedTask.errors += $errors
  $script:SelectedTask.needReboot=$script:SelectedTask.needReboot -or $needReboot
  if($errors -gt 0){$script:SelectedTask.lastError=$message}
- elseif($scriptName -eq 'Worker.ps1' -and $childPhase -eq 'Завершено с ошибками' -and $message -match '(?i)не найден проверенный пакет'){Write-SelectedLog 'DRP не предоставил пакет для части устройств; результат будет оценён после резервной проверки Windows Update.'}
+ elseif($scriptName -eq 'Worker.ps1' -and $childPhase -eq 'Завершено с ошибками' -and $message -match '(?i)не найден проверенный пакет|источник DriverPack сейчас недоступен|нет связи с источником|не подходит устройству'){Write-SelectedLog 'DRP не предоставил пакет для части устройств; результат будет оценён после резервной проверки Windows Update.'}
  elseif($childPhase -in @('Завершено с ошибками','Ошибка')){$script:SelectedTask.errors++;$script:SelectedTask.lastError=$message}
  Write-SelectedLog ($label+' завершено; ошибок '+$errors+'; '+$message)
  if($process.ExitCode -ne 0 -and $errors -eq 0){$script:SelectedTask.errors++;$script:SelectedTask.lastError=($label+' завершилось с кодом '+$process.ExitCode)}
@@ -77,7 +77,7 @@ try{
   $refreshStatus=Load-JsonFile $script:StatusFile ([pscustomobject]@{})
   if($refresh.ExitCode -ne 0 -or [int](Get-GSSelectedChildProperty $refreshStatus 'errors' 0) -gt 0){$script:SelectedTask.errors++;$script:SelectedTask.lastError=[string](Get-GSSelectedChildProperty $refreshStatus 'message' 'Повторное сканирование завершилось с ошибкой')}
   if($libraries.Contains('webview2')){
-   $installedRow=@(Load-JsonFile $script:DeviceFile @() | Where-Object { [string]$_.instanceId -eq 'LIBRARY|webview2' } | Select-Object -First 1)
+   $installedRow=@(Load-JsonFile $script:DeviceFile @() | Where-Object { $null -ne $_ -and [string](Get-GSSelectedChildProperty $_ 'instanceId' '') -eq 'LIBRARY|webview2' } | Select-Object -First 1)
    if($installedRow.Count -ne 1 -or [string]$installedRow[0].libraryStatus -ne 'Установлено' -or [bool]$installedRow[0].canSelect){
     $script:SelectedTask.errors++
     $script:SelectedTask.lastError='После установки и повторного сканирования WebView2 не подтверждён.'
