@@ -716,7 +716,7 @@ try {
       $note=[regex]::Match($body,'class="tile note".*?<div class="v">(.*?)</div>').Groups[1].Value
       throw ('HTML report has no detailed hardware summary. '+$note)
      }
-    }elseif($body -notmatch '(?m)^Garant Store' -or $body -notmatch '(?m)^BuildNumber: \d+'){throw 'TXT report lacks a measured Windows build.'}
+    }elseif($body -notmatch '(?m)^Garant Store' -or $body -notmatch '(?m)^\u0421\u0431\u043e\u0440\u043a\u0430: \d+' -or $body -match '(?m)^(BuildNumber|SMBIOSMemoryType|NetConnectionStatus): '){throw 'TXT report lacks a measured Windows build.'}
     Remove-Item -LiteralPath $reportPath -Force
     $metrics.Add([pscustomobject]@{Check='system-export';Format=$extension;Result=$true})
    }

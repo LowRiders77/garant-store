@@ -36,6 +36,7 @@ Assert-Equal 'cpu clock' '1,19 ГГц' $cpu[0].'Базовая частота'
 
 $os=@(Get-GSReadableDetailRows 'operatingSystem' @([pscustomobject]@{Caption='Windows 11 Pro';Version='10.0.26100';BuildNumber='26100';OSArchitecture='64-bit';InstallDate='/Date(1735689600000)/';LastBootUpTime='2026-11-19T08:00:00Z';TotalVisibleMemorySize=8213020;FreePhysicalMemory=3145728}))
 Assert-Equal 'os memory' '7,8 ГБ доступно Windows' $os[0].'Оперативная память'
+Assert-Equal 'os build' '26100' $os[0].'Сборка'
 if([string]$os[0].'Установлена' -notmatch '^\d\d\.\d\d\.20(24|25)$'){throw ('os install date: '+$os[0].'Установлена')}
 
 $net=@(Get-GSReadableDetailRows 'network' @(
@@ -64,6 +65,7 @@ try{
   $text=[IO.File]::ReadAllText($path)
   if($text -match '9223372036854775807|SMBIOSMemoryType|PhysicalAdapter'){throw ($ext+' report still shows raw WMI values')}
   if($text -notmatch 'DDR4' -or $text -notmatch 'SO-DIMM'){throw ($ext+' report misses readable memory type')}
+  if($ext -eq 'txt' -and $text -notmatch '(?m)^Сборка: \d+'){throw 'TXT report must show the Windows build in Russian'}
  }
  $json=Join-Path $tmp 'r.json'
  Export-GSSystemProfile $state $json $false

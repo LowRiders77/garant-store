@@ -125,7 +125,7 @@ function Get-GSReadableDetailRows([string]$Key,$Entries){
   $r=[ordered]@{};$skip=$false
   switch($Key){
    'operatingSystem'{
-    $r['Система']=$p['Caption'];$r['Версия']=$p['Version'];$r['Разрядность']=$p['OSArchitecture']
+    $r['Система']=$p['Caption'];$r['Сборка']=$p['BuildNumber'];$r['Версия']=$p['Version'];$r['Разрядность']=$p['OSArchitecture']
     $r['Установлена']=ConvertTo-GSReportDate $p['InstallDate'];$r['Последняя загрузка']=ConvertTo-GSReportDate $p['LastBootUpTime']
     $total=0.0;$free=0.0
     if([double]::TryParse([string]$p['TotalVisibleMemorySize'],[ref]$total) -and $total -gt 0){
