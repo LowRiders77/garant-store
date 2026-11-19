@@ -11,9 +11,10 @@
 function Get-GSSourceHost([string]$Url){try{return ([uri]$Url).Host.ToLowerInvariant()}catch{return ''}}
 
 function Get-GSSourceHealth([string]$Path){
+  # PS 5.1 emits a JSON array as one object: ForEach-Object unrolls it so every host is mapped.
   $map=@{}
   if($Path -and (Test-Path -LiteralPath $Path)){
-    try{foreach($e in @(Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-Json)){if($e -and $e.host){$map[[string]$e.host]=$e}}}catch{}
+    try{foreach($e in @(Get-Content -LiteralPath $Path -Raw -Encoding UTF8|ConvertFrom-Json|ForEach-Object{$_})){if($e -and $e.host){$map[[string]$e.host]=$e}}}catch{}
   }
   return $map
 }

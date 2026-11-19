@@ -18,7 +18,7 @@ try {
   # Stable ID first; the pre-migration ID keeps older per-user history readable.
   foreach($historyId in @($profile.localId,$profile.legacyLocalId)|Where-Object{$_}){
    $historyPath=Join-Path $historyRoot ('Devices\'+$historyId+'\sessions.json')
-   if(Test-Path -LiteralPath $historyPath){try{$history=@(Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8|ConvertFrom-Json)}catch{}}
+   if(Test-Path -LiteralPath $historyPath){try{$history=@(Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8|ConvertFrom-Json|ForEach-Object{$_})}catch{}}
    if($history.Count){break}
   }
   if($history.Count){break}
