@@ -81,7 +81,7 @@ $loadedDriverWindow=[Windows.Markup.XamlReader]::Load($driverReader)
 $driverReader.Close()
 $requiredNames=@('BrandMark','BuildIdentity','ContactInstagram','ContactWhatsApp','ContactEmail','CopySbp','CopyFeedback')
 foreach($name in $requiredNames){if(-not $aboutXml.OuterXml.Contains('x:Name="'+$name+'"')){throw ('About window is missing '+$name)}}
-$driverControls=@('DriverState','DriverDetail','DriverDevices','DriverScan','DriverSelectionActions','DriverInstall','DriverDownload','DriverSource','DriverNetwork','DriverLocal','DriverRestore','DriverWuRepair','DriverCancel','DriverDiagnostics')
+$driverControls=@('DriverState','DriverDetail','DriverDevices','DriverScan','DriverSelectionActions','DriverInstall','DriverDownload','DriverSource','DriverNetwork','DriverLocal','DriverRestore','DriverWuRepair','DriverCancel','DriverDiagnostics','DriverSoundTest')
 foreach($name in $driverControls){if(-not $driverXml.OuterXml.Contains('x:Name="'+$name+'"')){throw ('Driver window is missing '+$name)};if($null -eq $loadedDriverWindow.FindName($name)){throw ('Driver WPF did not load control '+$name)}}
 if(-not (Test-Path -LiteralPath (Join-Path $project 'Assets\GarantStoreMark.ico'))){throw 'Application icon is missing'}
 if(-not (Test-Path -LiteralPath (Join-Path $project 'GarantStore.Launcher.vbs'))){throw 'Hidden launcher is missing'}
@@ -98,6 +98,11 @@ if(-not (Test-Path -LiteralPath (Join-Path $project 'GarantStore.Launcher.vbs'))
 & (Join-Path $PSScriptRoot 'Test-UiProgressText.ps1')
 & (Join-Path $PSScriptRoot 'Test-FieldFailures.ps1')
 & (Join-Path $PSScriptRoot 'Test-VendorGpu.ps1')
+& (Join-Path $PSScriptRoot 'Test-BatteryTrust.ps1')
+& (Join-Path $PSScriptRoot 'Test-MachineIdentity.ps1')
+& (Join-Path $PSScriptRoot 'Test-DriverSafety.ps1')
+& (Join-Path $PSScriptRoot 'Test-SoundCheck.ps1')
+& (Join-Path $PSScriptRoot 'Test-ReportReadable.ps1')
 & (Join-Path $PSScriptRoot 'Test-WingetSearch.ps1')
 & (Join-Path $PSScriptRoot 'Test-WingetRepair.ps1')
 & (Join-Path $PSScriptRoot 'Test-WingetLiveSource.ps1')

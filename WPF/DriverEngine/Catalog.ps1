@@ -40,7 +40,11 @@ function Get-DynamicDrpLinks($dev) {
     if(!$useCache){
       Remove-Item -LiteralPath $html,$cacheInfo -Force -ErrorAction SilentlyContinue
       $tempHtml=$html+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
-      if(!(Curl-Fetch $url $tempHtml $true)) {Remove-Item -LiteralPath $tempHtml -Force -ErrorAction SilentlyContinue;Log "DRP-каталог не вернул проверенную HTML-страницу (URL-specific cache, HTTP 200) для ID $key; проверяю следующий совместимый ID.";continue}
+      if(!(Curl-Fetch $url $tempHtml $true)) {
+        Remove-Item -LiteralPath $tempHtml -Force -ErrorAction SilentlyContinue
+        # Source refused or unreachable: other IDs of this device would get the same answer.
+        if($script:LastFetchOutcome -in @('SourceUnavailable','NetworkError')){if($dev.instanceId){$script:GSDeviceOutcome[[string]$dev.instanceId]=$script:LastFetchOutcome};return @()}
+        Log "DRP-каталог не вернул проверенную HTML-страницу (URL-specific cache, HTTP 200) для ID $key; проверяю следующий совместимый ID.";continue}
       try{
         $bodyText=[System.IO.File]::ReadAllText($tempHtml)
         if($bodyText.Length -lt 100 -or $bodyText -match '(?is)^\s*(\{|\[).*?(error|blocked|captcha)') {throw 'Ответ каталога пустой или похож на страницу ошибки.'}
@@ -60,6 +64,7 @@ function Get-DynamicDrpLinks($dev) {
     if($found.Count){Log "DRP нашёл $($found.Count) ZIP-пакет(а) по ID $key";return @($found.ToArray())}
   }
   Log 'В каталоге DRP не найден ZIP ни для одного Hardware ID устройства.'
+  if($dev.instanceId -and -not $script:GSDeviceOutcome.ContainsKey([string]$dev.instanceId)){$script:GSDeviceOutcome[[string]$dev.instanceId]='NotFound'}
   return @()
 }
 function Get-Packages($devices,[switch]$KnownOnly) {

@@ -28,7 +28,7 @@ function Invoke-SelectedChild([string]$scriptName,[string]$parameter,[string]$va
  $script:SelectedTask.errors += $errors
  $script:SelectedTask.needReboot=$script:SelectedTask.needReboot -or $needReboot
  if($errors -gt 0){$script:SelectedTask.lastError=$message}
- elseif($scriptName -eq 'Worker.ps1' -and $childPhase -eq 'Завершено с ошибками' -and $message -match '(?i)не найден проверенный пакет'){Write-SelectedLog 'DRP не предоставил пакет для части устройств; результат будет оценён после резервной проверки Windows Update.'}
+ elseif($scriptName -eq 'Worker.ps1' -and $childPhase -eq 'Завершено с ошибками' -and $message -match '(?i)не найден проверенный пакет|источник DriverPack сейчас недоступен|нет связи с источником|не подходит устройству'){Write-SelectedLog 'DRP не предоставил пакет для части устройств; результат будет оценён после резервной проверки Windows Update.'}
  elseif($childPhase -in @('Завершено с ошибками','Ошибка')){$script:SelectedTask.errors++;$script:SelectedTask.lastError=$message}
  Write-SelectedLog ($label+' завершено; ошибок '+$errors+'; '+$message)
  if($process.ExitCode -ne 0 -and $errors -eq 0){$script:SelectedTask.errors++;$script:SelectedTask.lastError=($label+' завершилось с кодом '+$process.ExitCode)}

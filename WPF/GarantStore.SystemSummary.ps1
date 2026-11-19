@@ -208,22 +208,6 @@ function Format-GSDisplay([object[]]$Panels){
  return (@($labels) -join ' + ')
 }
 
-function Format-GSBattery($Battery){
- if($null -eq $Battery -or -not [bool]$Battery.Present){return 'Нет (настольный ПК или аккумулятор не обнаружен)'}
- $design=[double]$Battery.DesignCapacity;$full=[double]$Battery.FullChargeCapacity
- $parts=@()
- if($design -gt 0 -and $full -gt 0){
-  $health=[Math]::Min(100,[Math]::Round($full*100/$design))
-  $verdict=if($health -ge 85){'хорошее'}elseif($health -ge 70){'нормальное'}elseif($health -ge 50){'заметный износ'}else{'требует замены'}
-  $parts+=([string]$health+'% ёмкости ('+$verdict+'), износ '+[string](100-$health)+'%')
-  $inv=[Globalization.CultureInfo]::InvariantCulture
-  $parts+=($full.ToString('#,0',$inv).Replace(',',' ')+' из '+$design.ToString('#,0',$inv).Replace(',',' ')+' мВт·ч')
- }else{$parts+='ёмкость не определена'}
- if([int]$Battery.CycleCount -gt 0){$parts+=('циклов: '+[string]$Battery.CycleCount)}
- if($null -ne $Battery.ChargePercent -and [int]$Battery.ChargePercent -ge 0){$parts+=('заряд '+[string]$Battery.ChargePercent+'%')}
- return ($parts -join ', ')
-}
-
 function Format-GSBoardName([string]$Manufacturer,[string]$Product){
  # "Micro-Star International Co., Ltd." + "B550M PRO-VDH (MS-7C95)" -> "MSI B550M PRO-VDH (MS-7C95)"
  $product=ConvertTo-GSCleanText $Product
@@ -234,34 +218,132 @@ function Format-GSBoardName([string]$Manufacturer,[string]$Product){
  return $product
 }
 
-function Get-GSBatteryHealth($Battery){
- if($null -eq $Battery -or -not [bool]$Battery.Present){return -1}
+# ---------------------------------------------------------------------------
+# Battery telemetry trust. Cheap and Chinese controllers often report
+# FullChargeCapacity == DesignCapacity and a placeholder serial number; that is
+# not "100% healthy", it is "the controller does not measure". The serial
+# itself is only inspected at collection time and never stored or shown.
+function Test-GSPlaceholderSerial([string]$Serial){
+ $s=([string]$Serial).Trim()
+ if(-not $s){return $false}                       # empty: unknown, not evidence of a fake
+ $compact=($s -replace '[\s\-_.:]','')
+ if($compact -match '(?i)^(unknown|n/?a|na|none|null|default|serial(number)?|sn|0x0+|to ?be ?filled.*|not ?specified|empty)$'){return $true}
+ if($compact.Length -lt 3){return $true}
+ if($compact -match '^(.)\1+$'){return $true}      # 0000, 1111, FFFF
+ if($compact -match '^0+\d{1,2}$'){return $true}   # 00001, 0001
+ foreach($seq in @('0123456789','123456789','12345678','1234567','987654321','98765432','abcdef')){
+  if($compact.ToLowerInvariant() -eq $seq -or $compact.ToLowerInvariant() -eq $seq.Substring(0,[Math]::Min($seq.Length,$compact.Length)) -and $compact.Length -ge 5){return $true}
+ }
+ return $false
+}
+
+function Get-GSBatteryAssessment($Battery){
+ # Status: Absent | Invalid | Unconfirmed | Confirmed. Reasons are client-facing.
+ $result=[ordered]@{Status='Absent';Reasons=@();HealthPercent=-1;Full=0.0;Design=0.0;Voltage=0.0;Cycles=0;DisplayEqual=$false;Unit='';FullShown='';DesignShown=''}
+ if($null -eq $Battery -or -not [bool]$Battery.Present){return [pscustomobject]$result}
  $design=[double]$Battery.DesignCapacity;$full=[double]$Battery.FullChargeCapacity
- if($design -le 0 -or $full -le 0){return -1}
- return [int][Math]::Min(100,[Math]::Round($full*100/$design))
+ $voltage=0.0;if($Battery.PSObject.Properties['DesignVoltage']){$voltage=[double]$Battery.DesignVoltage}
+ $result.Full=$full;$result.Design=$design;$result.Voltage=$voltage;$result.Cycles=[int]$Battery.CycleCount
+ $inv=[Globalization.CultureInfo]::InvariantCulture
+ if($design -gt 0 -and $full -gt 0){
+  if($voltage -ge 3000 -and $voltage -le 30000){
+   $result.Unit='mAh';$result.FullShown=([Math]::Round($full*1000/$voltage)).ToString('#,0',$inv).Replace(',',' ');$result.DesignShown=([Math]::Round($design*1000/$voltage)).ToString('#,0',$inv).Replace(',',' ')
+  }else{
+   $result.Unit='Вт·ч';$result.FullShown=($full/1000).ToString('0.#',$inv);$result.DesignShown=($design/1000).ToString('0.#',$inv)
+  }
+  # Equal after mWh->mAh conversion and rounding is NOT the same as equal raw values.
+  $result.DisplayEqual=($result.FullShown -eq $result.DesignShown)
+ }
+ $serialSuspect=($Battery.PSObject.Properties['SerialSuspect'] -and [bool]$Battery.SerialSuspect)
+ if($design -le 0 -or $full -le 0){
+  $result.Status='Invalid';$result.Reasons=@('контроллер не сообщает ёмкость')
+ }elseif($design -lt 5000 -or $design -gt 250000 -or $full -gt $design*1.25 -or $full -lt $design*0.05){
+  $result.Status='Invalid';$result.Reasons=@('значения ёмкости неправдоподобны')
+ }else{
+  $reasons=@()
+  if($full -eq $design){$reasons+='полная ёмкость точно равна паспортной'}
+  if($full -gt $design*1.05){$reasons+='полная ёмкость больше паспортной'}
+  if($serialSuspect){$reasons+='серийный номер аккумулятора — заглушка'}
+  if($reasons.Count){$result.Status='Unconfirmed';$result.Reasons=$reasons}
+  else{
+   $result.Status='Confirmed'
+   # Floor: rounding must never turn 99.7% into a "perfect" 100%.
+   $result.HealthPercent=[int][Math]::Min(100,[Math]::Floor($full*100/$design))
+  }
+ }
+ return [pscustomobject]$result
+}
+
+function Get-GSBatteryList($Battery){
+ return @(@($Battery)|Where-Object{$null -ne $_ -and $_.PSObject.Properties['Present'] -and [bool]$_.Present})
+}
+
+function Get-GSBatteryVerdict([int]$Health){
+ if($Health -ge 85){'хорошее'}elseif($Health -ge 70){'нормальное'}elseif($Health -ge 50){'заметный износ'}else{'требует замены'}
+}
+
+function Format-GSBatteryOne($Battery,[switch]$Legacy){
+ $a=Get-GSBatteryAssessment $Battery
+ $parts=@()
+ switch($a.Status){
+  'Confirmed'{
+   if($Legacy){
+    $inv=[Globalization.CultureInfo]::InvariantCulture
+    $parts+=([string]$a.HealthPercent+'% ёмкости ('+(Get-GSBatteryVerdict $a.HealthPercent)+'), износ '+[string](100-$a.HealthPercent)+'%')
+    $parts+=($a.Full.ToString('#,0',$inv).Replace(',',' ')+' из '+$a.Design.ToString('#,0',$inv).Replace(',',' ')+' мВт·ч')
+   }else{
+    $parts+=($a.FullShown+' из '+$a.DesignShown+' '+$a.Unit)
+    $parts+=('состояние '+[string]$a.HealthPercent+'% ('+(Get-GSBatteryVerdict $a.HealthPercent)+')')
+    if($a.DisplayEqual){$parts+='значения округлены при пересчёте в '+$a.Unit}
+   }
+  }
+  'Unconfirmed'{
+   $parts+='Данные не подтверждены'
+   $parts+=('контроллер сообщает '+$a.FullShown+' из '+$a.DesignShown+' '+$a.Unit+' (отчёт Windows)')
+   $parts+=('причина: '+($a.Reasons -join '; '))
+  }
+  default{
+   $parts+='Данные не подтверждены'
+   $parts+=('причина: '+($a.Reasons -join '; '))
+  }
+ }
+ if($a.Cycles -gt 0){$parts+=$(if($Legacy){'циклов: '}else{'циклов заряда: '})+[string]$a.Cycles}
+ if($Legacy -and $Battery.PSObject.Properties['ChargePercent'] -and [int]$Battery.ChargePercent -ge 0){$parts+=('заряд '+[string]$Battery.ChargePercent+'%')}
+ return ($parts -join $(if($Legacy){', '}else{' · '}))
+}
+
+function Format-GSBattery($Battery){
+ $list=@(Get-GSBatteryList $Battery)
+ if(-not $list.Count){return 'Нет (настольный ПК или аккумулятор не обнаружен)'}
+ if($list.Count -eq 1){return (Format-GSBatteryOne $list[0] -Legacy)}
+ $i=0;return (@($list|ForEach-Object{$i++;'АКБ '+$i+': '+(Format-GSBatteryOne $_ -Legacy)}) -join ' + ')
+}
+
+function Get-GSBatteryHealth($Battery){
+ # Only confirmed telemetry yields a health figure; any doubt -> -1 (no bar, no verdict).
+ $list=@(Get-GSBatteryList $Battery)
+ if(-not $list.Count){return -1}
+ $values=@()
+ foreach($b in $list){$a=Get-GSBatteryAssessment $b;if($a.Status -ne 'Confirmed'){return -1};$values+=$a.HealthPercent}
+ return [int](($values|Measure-Object -Minimum).Minimum)
+}
+
+function Get-GSBatteryTrust($Battery){
+ $list=@(Get-GSBatteryList $Battery)
+ if(-not $list.Count){return 'Absent'}
+ $states=@($list|ForEach-Object{(Get-GSBatteryAssessment $_).Status})
+ if($states -contains 'Invalid'){return 'Invalid'}
+ if($states -contains 'Unconfirmed'){return 'Unconfirmed'}
+ return 'Confirmed'
 }
 
 function Format-GSPower($Battery){
  # Laptop: capacity in mAh (Windows reports mWh; mAh needs the design voltage),
  # health and charge cycles. Desktop: Windows has no data about the PSU.
- if($null -eq $Battery -or -not [bool]$Battery.Present){return 'Не определяется программно · модель и мощность — на наклейке блока питания'}
- $design=[double]$Battery.DesignCapacity;$full=[double]$Battery.FullChargeCapacity
- $voltage=0.0;if($Battery.PSObject.Properties['DesignVoltage']){$voltage=[double]$Battery.DesignVoltage}
- $inv=[Globalization.CultureInfo]::InvariantCulture
- $n={param([double]$v)$v.ToString('#,0',$inv).Replace(',',' ')}
- $parts=@()
- if($design -gt 0 -and $full -gt 0){
-  if($voltage -ge 3000 -and $voltage -le 30000){
-   $parts+=((& $n ([Math]::Round($full*1000/$voltage)))+' из '+(& $n ([Math]::Round($design*1000/$voltage)))+' mAh')
-  }else{
-   $parts+=(($full/1000).ToString('0.#',$inv)+' из '+($design/1000).ToString('0.#',$inv)+' Вт·ч')
-  }
-  $health=Get-GSBatteryHealth $Battery
-  $verdict=if($health -ge 85){'хорошее'}elseif($health -ge 70){'нормальное'}elseif($health -ge 50){'заметный износ'}else{'требует замены'}
-  $parts+=('состояние '+[string]$health+'% ('+$verdict+')')
- }else{$parts+='ёмкость не определена'}
- if([int]$Battery.CycleCount -gt 0){$parts+=('циклов заряда: '+[string]$Battery.CycleCount)}
- return ($parts -join ' · ')
+ $list=@(Get-GSBatteryList $Battery)
+ if(-not $list.Count){return 'Не определяется программно · модель и мощность — на наклейке блока питания'}
+ if($list.Count -eq 1){return (Format-GSBatteryOne $list[0])}
+ $i=0;return (@($list|ForEach-Object{$i++;'АКБ '+$i+': '+(Format-GSBatteryOne $_)}) -join ' + ')
 }
 
 function Invoke-GSSummaryPart([scriptblock]$Block){
@@ -271,7 +353,8 @@ function Invoke-GSSummaryPart([scriptblock]$Block){
 
 function New-GSSystemSummary($Raw){
  # Builds the ordered first-page summary from Get-GSSummaryRaw output.
- $kind=if([bool]$Raw.Battery.Present -or [int]$Raw.PcSystemType -eq 2){'Ноутбук'}else{'Компьютер'}
+ $batteries=if($Raw.PSObject.Properties['Batteries'] -and @($Raw.Batteries).Count){@($Raw.Batteries)}else{@($Raw.Battery)}
+ $kind=if(@(Get-GSBatteryList $batteries).Count -or [int]$Raw.PcSystemType -eq 2){'Ноутбук'}else{'Компьютер'}
  $model=Format-GSModelName ([string]$Raw.Manufacturer) ([string]$Raw.Model) ([string]$Raw.Version) ([string]$Raw.Board) ([string]$Raw.ComputerName)
  return [pscustomobject][ordered]@{
   Kind=$kind
@@ -282,9 +365,10 @@ function New-GSSystemSummary($Raw){
   Memory=Invoke-GSSummaryPart {Format-GSMemory @($Raw.MemoryModules)}
   Storage=Invoke-GSSummaryPart {Format-GSStorage @($Raw.Disks)}
   Display=Invoke-GSSummaryPart {Format-GSDisplay @($Raw.Panels)}
-  Battery=Invoke-GSSummaryPart {Format-GSBattery $Raw.Battery}
-  Power=Invoke-GSSummaryPart {Format-GSPower $Raw.Battery}
-  BatteryHealth=$(try{Get-GSBatteryHealth $Raw.Battery}catch{-1})
+  Battery=Invoke-GSSummaryPart {Format-GSBattery $batteries}
+  Power=Invoke-GSSummaryPart {Format-GSPower $batteries}
+  BatteryHealth=$(try{Get-GSBatteryHealth $batteries}catch{-1})
+  BatteryTrust=$(try{Get-GSBatteryTrust $batteries}catch{'Invalid'})
  }
 }
 
@@ -384,32 +468,38 @@ function Get-GSSummaryRaw {
   }catch{}
  }
 
- $battery=[pscustomobject]@{Present=$false;DesignCapacity=0;FullChargeCapacity=0;CycleCount=0;ChargePercent=-1}
- $wmiBattery=@(Get-GSCimSafe Win32_Battery)|Select-Object -First 1
- if($wmiBattery){
-  $battery.Present=$true;$battery.ChargePercent=[int]$wmiBattery.EstimatedChargeRemaining
-  try{$battery|Add-Member -NotePropertyName DesignVoltage -NotePropertyValue ([double]$wmiBattery.DesignVoltage) -Force}catch{}
+ # Every battery (some laptops have two). The serial number is read only to
+ # judge whether it is a placeholder; it is never stored, returned or shown.
+ $batteries=New-Object System.Collections.Generic.List[object]
+ $wmiBatteries=@(Get-GSCimSafe Win32_Battery)
+ if($wmiBatteries.Count){
+  $reportNodes=@()
   $report=Join-Path ([IO.Path]::GetTempPath()) ('gs-battery-'+[guid]::NewGuid().ToString('N')+'.xml')
   try{
    $null=& (Join-Path $env:WINDIR 'System32\powercfg.exe') /batteryreport /xml /output $report 2>&1
-   if(Test-Path -LiteralPath $report){
-    [xml]$xml=Get-Content -LiteralPath $report -Raw -Encoding UTF8
-    $node=@($xml.GetElementsByTagName('Battery'))|Select-Object -First 1
-    if($node){
-     $battery.DesignCapacity=[double]$node.DesignCapacity;$battery.FullChargeCapacity=[double]$node.FullChargeCapacity
-     if($node.CycleCount){$battery.CycleCount=[int]$node.CycleCount}
-    }
-   }
+   if(Test-Path -LiteralPath $report){[xml]$xml=Get-Content -LiteralPath $report -Raw -Encoding UTF8;$reportNodes=@($xml.GetElementsByTagName('Battery'))}
   }catch{}finally{Remove-Item -LiteralPath $report -Force -ErrorAction SilentlyContinue}
-  if($battery.DesignCapacity -le 0){
-   try{
-    $static=@(Get-GSCimSafe BatteryStaticData 'root/wmi')|Select-Object -First 1
-    $fullWmi=@(Get-GSCimSafe BatteryFullChargedCapacity 'root/wmi')|Select-Object -First 1
-    if($static){$battery.DesignCapacity=[double]$static.DesignedCapacity}
-    if($fullWmi){$battery.FullChargeCapacity=[double]$fullWmi.FullChargedCapacity}
-   }catch{}
+  $staticNodes=@();$fullNodes=@()
+  if(-not $reportNodes.Count){$staticNodes=@(Get-GSCimSafe BatteryStaticData 'root/wmi');$fullNodes=@(Get-GSCimSafe BatteryFullChargedCapacity 'root/wmi')}
+  $count=[Math]::Max($wmiBatteries.Count,[Math]::Max($reportNodes.Count,$staticNodes.Count))
+  for($i=0;$i -lt $count;$i++){
+   $b=[pscustomobject]@{Present=$true;DesignCapacity=0.0;FullChargeCapacity=0.0;CycleCount=0;ChargePercent=-1;DesignVoltage=0.0;SerialSuspect=$false;Source=''}
+   if($i -lt $wmiBatteries.Count){try{$b.ChargePercent=[int]$wmiBatteries[$i].EstimatedChargeRemaining;$b.DesignVoltage=[double]$wmiBatteries[$i].DesignVoltage}catch{}}
+   elseif($wmiBatteries.Count){try{$b.DesignVoltage=[double]$wmiBatteries[0].DesignVoltage}catch{}}
+   $serial=''
+   if($i -lt $reportNodes.Count){
+    $node=$reportNodes[$i]
+    try{$b.DesignCapacity=[double]$node.DesignCapacity;$b.FullChargeCapacity=[double]$node.FullChargeCapacity;if($node.CycleCount){$b.CycleCount=[int]$node.CycleCount};$serial=[string]$node.SerialNumber;$b.Source='powercfg'}catch{}
+   }elseif($i -lt $staticNodes.Count){
+    try{$b.DesignCapacity=[double]$staticNodes[$i].DesignedCapacity;$serial=[string]$staticNodes[$i].SerialNumber;$b.Source='wmi'}catch{}
+    if($i -lt $fullNodes.Count){try{$b.FullChargeCapacity=[double]$fullNodes[$i].FullChargedCapacity}catch{}}
+   }
+   $b.SerialSuspect=(Test-GSPlaceholderSerial $serial)
+   $serial=$null
+   $batteries.Add($b)
   }
  }
+ $battery=if($batteries.Count){$batteries[0]}else{[pscustomobject]@{Present=$false;DesignCapacity=0;FullChargeCapacity=0;CycleCount=0;ChargePercent=-1}}
 
  return [pscustomobject]@{
   Manufacturer=[string]$(if($computer){$computer.Manufacturer}else{''})
@@ -421,6 +511,6 @@ function Get-GSSummaryRaw {
   ComputerName=[Environment]::MachineName
   PcSystemType=[int]$(if($computer){$computer.PCSystemType}else{0})
   CpuName=$cpuName;Cores=[int]$(if($cpu){$cpu.NumberOfCores}else{0});Threads=[int]$(if($cpu){$cpu.NumberOfLogicalProcessors}else{0})
-  Gpus=@($gpus.ToArray());MemoryModules=$memoryModules;Disks=$disks;Panels=@($panels.ToArray());Battery=$battery
+  Gpus=@($gpus.ToArray());MemoryModules=$memoryModules;Disks=$disks;Panels=@($panels.ToArray());Battery=$battery;Batteries=@($batteries.ToArray())
  }
 }

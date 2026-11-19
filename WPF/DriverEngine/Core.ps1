@@ -11,6 +11,10 @@ $script:LibraryDir = if ([string]::IsNullOrWhiteSpace($env:GARANT_PO_LIBRARY_DIR
 # DriverDir and LibraryDir point at the user's Downloads and receive copies.
 $script:EngineDownloadDir = Join-Path $script:DataRoot 'Downloads'
 . (Join-Path $script:Root 'VendorGpu.ps1')
+. (Join-Path $script:Root 'DriverSafety.ps1')
+$script:GSSourceHealthPath = Join-Path $script:StateDir 'source-health.json'
+if(-not (Get-Variable -Name GSDeviceOutcome -Scope Script -ErrorAction SilentlyContinue)){$script:GSDeviceOutcome=@{}}
+if(-not (Get-Variable -Name LastFetchOutcome -Scope Script -ErrorAction SilentlyContinue)){$script:LastFetchOutcome=''}
 $script:EngineLibraryDir = Join-Path $script:DataRoot 'Libraries'
 $script:StagingDir = Join-Path $script:DataRoot 'Staging'
 foreach ($d in @($script:StateDir,$script:LogDir,$script:DownloadDir,$script:CacheDir,$script:DriverDir,$script:LibraryDir,$script:EngineDownloadDir,$script:EngineLibraryDir,$script:StagingDir)) { if (!(Test-Path $d)) {New-Item -ItemType Directory -Path $d -Force | Out-Null} }
@@ -51,10 +55,47 @@ function Test-GSDownloadResponse([int]$ExitCode,[string]$HttpStatus,[string]$Con
   return $true
 }
 . (Join-Path $PSScriptRoot 'SystemProfile.ps1')
+function Merge-GSLegacyDeviceHistory($Profile) {
+  # One-time, lossless migration of history saved under the old (disk-dependent)
+  # IDs into the stable ID. Old folders are kept; aliases.json records the merge.
+  $devicesRoot=Join-Path $script:DataRoot 'Devices'
+  if(!(Test-Path -LiteralPath $devicesRoot)){return @()}
+  $newId=[string]$Profile.localId
+  $aliasesPath=Join-Path $devicesRoot 'aliases.json'
+  $aliases=@{}
+  foreach($entry in @(Load-JsonFile $aliasesPath @())){if($entry -and $entry.legacyId){$aliases[[string]$entry.legacyId]=[string]$entry.localId}}
+  # The default data root is per machine (ProgramData), so every old-format folder
+  # there is this machine's history. A custom root may be shared: merge only the
+  # ID the old algorithm gives for the current hardware.
+  $sharedRoot=-not [string]::IsNullOrWhiteSpace($env:GARANT_PO_DATA_ROOT)
+  $candidates=@()
+  if($sharedRoot){if($Profile.PSObject.Properties['legacyLocalId'] -and $Profile.legacyLocalId){$candidates=@([string]$Profile.legacyLocalId)}}
+  else{$candidates=@(Get-ChildItem -LiteralPath $devicesRoot -Directory -ErrorAction SilentlyContinue|Where-Object{$_.Name -match '^[0-9a-f]{64}$'}|ForEach-Object{$_.Name})}
+  $merged=@()
+  $targetPath=Join-Path (Join-Path $devicesRoot $newId) 'sessions.json'
+  $targetDir=Split-Path -Parent $targetPath
+  if(!(Test-Path -LiteralPath $targetDir)){New-Item -ItemType Directory -Path $targetDir -Force|Out-Null}
+  foreach($legacyId in @($candidates|Where-Object{$_ -and $_ -ne $newId -and -not $aliases.ContainsKey($_)})){
+    $legacyPath=Join-Path (Join-Path $devicesRoot $legacyId) 'sessions.json'
+    if(!(Test-Path -LiteralPath $legacyPath)){continue}
+    $current=@(Load-JsonFile $targetPath @())
+    $old=@(Load-JsonFile $legacyPath @())
+    $seen=@{};$all=New-Object System.Collections.Generic.List[object]
+    # capturedUtc is a string in Windows PowerShell and a DateTime in PowerShell 7: compare as time.
+    $timeOf={param($r)$t=[datetime]::MinValue;try{$t=([datetime]$r.capturedUtc).ToUniversalTime()}catch{};$t}
+    foreach($r in @($current)+@($old)){if($null -eq $r){continue};$key=(& $timeOf $r).ToString('o');if($seen.ContainsKey($key)){continue};$seen[$key]=$true;$all.Add($r)}
+    $sorted=@($all.ToArray()|Sort-Object @{Expression={& $timeOf $_};Descending=$true}|Select-Object -First 100)
+    Save-JsonFile $targetPath $sorted
+    $aliases[$legacyId]=$newId;$merged+=$legacyId
+  }
+  if($merged.Count){Save-JsonFile $aliasesPath @($aliases.Keys|ForEach-Object{[pscustomobject]@{legacyId=$_;localId=$aliases[$_];mergedUtc=(Get-Date).ToUniversalTime().ToString('o')}})}
+  return $merged
+}
 function Save-GSDeviceSession($Profile,[int]$ProblemCount,[int]$InventoryCount,[int]$UpdateCount,[int]$LibraryCount) {
   $record=[pscustomobject]@{capturedUtc=$Profile.capturedUtc;localId=$Profile.localId;windows=$Profile.windows;build=$Profile.build;problemCount=$ProblemCount;installedDriverCount=$InventoryCount;confirmedUpdateCount=$UpdateCount;libraryCount=$LibraryCount;rebootRequired=$false}
   $deviceRoot=Join-Path (Join-Path $script:DataRoot 'Devices') ([string]$Profile.localId)
   if(!(Test-Path -LiteralPath $deviceRoot)){New-Item -ItemType Directory -Path $deviceRoot -Force|Out-Null}
+  try{Merge-GSLegacyDeviceHistory -Profile $Profile}catch{}
   $deviceHistoryPath=Join-Path $deviceRoot 'sessions.json'
   $deviceHistory=@(Load-JsonFile $deviceHistoryPath @())
   $deviceHistory=@($record)+@($deviceHistory|Select-Object -First 49)
@@ -243,6 +284,11 @@ function Get-GSDriverSourceUrl($Device) {
     if($ids | Where-Object {$_ -match '^PCI\\VEN_10DE&DEV_'}){return 'https://www.nvidia.com/Download/index.aspx?lang=ru-ru'}
     if($ids | Where-Object {$_ -match '^PCI\\VEN_1002&DEV_'}){return 'https://www.amd.com/en/support/download/drivers.html'}
     if($ids | Where-Object {$_ -match '^PCI\\VEN_8086&DEV_'}){return 'https://www.intel.com/content/www/us/en/support/detect.html'}
+  }
+  # DriverPack refuses automated requests right now: point to the manufacturer instead.
+  if(Test-GSSourceBlocked -Path $script:GSSourceHealthPath -Url 'https://driverpack.io/'){
+    $profile=Load-JsonFile (Join-Path $script:StateDir 'system-profile.json') $null
+    if($profile){$vendorUrl=Get-GSVendorSupportUrl ([string]$profile.manufacturer) ([string]$profile.model);if($vendorUrl){return $vendorUrl}}
   }
   $id=$ids | Where-Object {$_ -match '^(PCI\\VEN_[0-9A-F]{4}&DEV_|USB\\VID_|ACPI\\)'} | Select-Object -First 1
   if(-not $id){return 'https://driverpack.io/en/hwids/'}

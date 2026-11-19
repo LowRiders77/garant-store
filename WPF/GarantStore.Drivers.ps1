@@ -226,6 +226,18 @@ function Apply-GSDriverSnapshot($Snapshot){
  $devices=@(Get-GSDriverProperty $Snapshot 'devices' @())
  $logs=@(Get-GSDriverProperty $Snapshot 'logs' @())
  Set-GSDriverState -Title $phase -Detail $message -Busy $busy
+ if($busy -and [bool](Get-GSDriverProperty $s 'cancelRequested' $false)){
+  # The server owns the cancel state: show how long the stop takes instead of inviting repeated clicks.
+  $cancelSeconds=[int](Get-GSDriverProperty $s 'cancelSeconds' 0)
+  $script:driverCancel.IsEnabled=$false
+  $script:driverState.Text='Остановка…'
+  $script:driverDetail.Text=('Остановка запрошена '+$cancelSeconds+' с назад. Текущий шаг завершается безопасно; установка драйвера не прерывается на середине. Если процесс не ответит, он будет остановлен автоматически.')
+ }
+ $audioCheck=Get-GSDriverProperty $s 'audioCheck' $null
+ if(-not $busy -and $audioCheck){
+  $audioText=[string](Get-GSDriverProperty $audioCheck 'text' '')
+  if($audioText){$script:driverDetail.Text=($message+' '+$audioText).Trim()}
+ }
  $profile=Get-GSDriverProperty $s 'systemProfile' $null
  if($profile){
   $machine=[string](Get-GSDriverProperty $profile 'manufacturer' 'Производитель не определён')
@@ -341,6 +353,37 @@ function Invoke-GSDriverAction([string]$Action){
  }catch{$message=$_.Exception.Message;$script:driverDetail.Text=$message;$script:driverState.Text='Операция не запущена';Write-GSDriverUiLog 'ACTION ERROR' ($Action+' | '+$message)}
 }
 
+function Get-GSSoundTestVerdict($Endpoints,[string]$Answer){
+ # Pure decision used by the speaker test: PnP state alone never proves that speakers work.
+ $all=@($Endpoints|Where-Object{$null -ne $_})
+ $ok=@($all|Where-Object{[string](Get-GSDriverProperty $_ 'Status' '') -eq 'OK'})
+ $bad=@($all|Where-Object{[string](Get-GSDriverProperty $_ 'Status' '') -ne 'OK'})
+ if($ok.Count -eq 0){
+  return [pscustomobject]@{State='NoEndpoint';Play=$false;Text=('Windows не видит ни одного рабочего устройства вывода звука'+$(if($bad.Count){' (с ошибкой: '+$bad.Count+')'}else{''})+'. Проверьте драйвер аудио (Intel SST/DSP и кодек Realtek — это разные устройства).')}
+ }
+ if(-not $Answer){return [pscustomobject]@{State='Ready';Play=$true;Text=('Рабочих устройств вывода: '+$ok.Count+'. Сейчас прозвучит тестовый сигнал.')}}
+ if($Answer -eq 'Yes'){return [pscustomobject]@{State='Confirmed';Play=$false;Text='Звук подтверждён оператором: тестовый сигнал слышен.'}}
+ return [pscustomobject]@{State='NotHeard';Play=$false;Text='Тестовый сигнал не слышен. Проверьте громкость, устройство вывода по умолчанию, отключение звука клавишами и шлейф динамиков.'}
+}
+
+function Test-GSDriverSpeakers {
+ $script:driverHint.Text='Проверка звука…'
+ try{
+  $endpoints=@()
+  try{$endpoints=@(Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction Stop|Where-Object{[string]$_.InstanceId -like 'SWD\MMDEVAPI\{0.0.0.*'}|ForEach-Object{[pscustomobject]@{Status=[string]$_.Status;Name=[string]$_.FriendlyName}})}catch{$endpoints=@()}
+  $verdict=Get-GSSoundTestVerdict $endpoints ''
+  if(-not $verdict.Play){$script:driverHint.Text=$verdict.Text;Write-GSDriverUiLog 'sound-test' $verdict.State;return}
+  $wav=@('Windows Notify System Generic.wav','Windows Background.wav','chimes.wav','tada.wav')|ForEach-Object{Join-Path $env:WINDIR ('Media\'+$_)}|Where-Object{Test-Path -LiteralPath $_}|Select-Object -First 1
+  if(-not $wav){$script:driverHint.Text='Не найден системный звук для теста (папка Windows\Media пуста).';Write-GSDriverUiLog 'sound-test' 'NoSample';return}
+  $player=New-Object System.Media.SoundPlayer $wav
+  try{$player.PlaySync();Start-Sleep -Milliseconds 250;$player.PlaySync()}finally{$player.Dispose()}
+  $answer=[Windows.MessageBox]::Show('Вы услышали тестовый сигнал из динамиков (или наушников)?','Проверка звука',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question)
+  $final=Get-GSSoundTestVerdict $endpoints ([string]$answer)
+  $script:driverHint.Text=$final.Text
+  Write-GSDriverUiLog 'sound-test' ($final.State+' endpoints='+@($endpoints|Where-Object{$_.Status -eq 'OK'}).Count)
+ }catch{$script:driverHint.Text='Проверка звука не выполнена: '+$_.Exception.Message}
+}
+
 function Save-GSDriverDiagnostics {
  try{
   $dialog=New-Object Microsoft.Win32.SaveFileDialog;$dialog.Filter='ZIP архив (*.zip)|*.zip';$dialog.FileName=('Garant-PO-Diagnostics - '+(ConvertTo-GSSafeFileName (Get-GSDiagnosticsModelName))+' - '+(Get-Date -Format 'yyyy-MM-dd HH-mm')+'.zip')
@@ -360,7 +403,7 @@ function Show-DriverModule {
   $reader=New-Object System.Xml.XmlNodeReader($xml);$driver=[Windows.Markup.XamlReader]::Load($reader);$reader.Close()
   $driver.Owner=$win
   if(Test-Path -LiteralPath (Join-Path $root 'Assets\GarantStoreMark.ico')){$driver.Icon=[Windows.Media.Imaging.BitmapFrame]::Create([Uri]::new((Join-Path $root 'Assets\GarantStoreMark.ico')))}
-  foreach($pair in @(@('DriverState','driverState'),@('DriverDetail','driverDetail'),@('DriverDeviceProfile','driverDeviceProfile'),@('DriverProgress','driverProgress'),@('DriverDeviceCount','driverDeviceCount'),@('DriverDevices','driverDevices'),@('DriverLog','driverLog'),@('DriverHint','driverHint'),@('DriverScan','driverScan'),@('DriverSelectionActions','driverSelectionActions'),@('DriverInstall','driverInstall'),@('DriverDownload','driverDownload'),@('DriverSource','driverSource'),@('DriverNetwork','driverNetwork'),@('DriverLocal','driverLocal'),@('DriverRestore','driverRestore'),@('DriverWuRepair','driverWuRepair'),@('DriverCancel','driverCancel'),@('DriverSelectAll','driverSelectAll'),@('DriverOpenFolder','driverOpenFolder'),@('DriverDiagnostics','driverDiagnostics'),@('DriverClose','driverClose'),@('DriverViewAll','driverViewAll'),@('DriverViewComponents','driverViewComponents'),@('DriverToggleLog','driverToggleLog'),@('DriverLogPanel','driverLogPanel'),@('DriverLogColumn','driverLogColumn'),@('DriverLogSpacer','driverLogSpacer'),@('DriverEmptyMessage','driverEmptyMessage'))){Set-Variable -Scope Script -Name $pair[1] -Value $driver.FindName($pair[0])}
+  foreach($pair in @(@('DriverState','driverState'),@('DriverDetail','driverDetail'),@('DriverDeviceProfile','driverDeviceProfile'),@('DriverProgress','driverProgress'),@('DriverDeviceCount','driverDeviceCount'),@('DriverDevices','driverDevices'),@('DriverLog','driverLog'),@('DriverHint','driverHint'),@('DriverScan','driverScan'),@('DriverSelectionActions','driverSelectionActions'),@('DriverInstall','driverInstall'),@('DriverDownload','driverDownload'),@('DriverSource','driverSource'),@('DriverNetwork','driverNetwork'),@('DriverLocal','driverLocal'),@('DriverRestore','driverRestore'),@('DriverWuRepair','driverWuRepair'),@('DriverCancel','driverCancel'),@('DriverSelectAll','driverSelectAll'),@('DriverOpenFolder','driverOpenFolder'),@('DriverDiagnostics','driverDiagnostics'),@('DriverSoundTest','driverSoundTest'),@('DriverClose','driverClose'),@('DriverViewAll','driverViewAll'),@('DriverViewComponents','driverViewComponents'),@('DriverToggleLog','driverToggleLog'),@('DriverLogPanel','driverLogPanel'),@('DriverLogColumn','driverLogColumn'),@('DriverLogSpacer','driverLogSpacer'),@('DriverEmptyMessage','driverEmptyMessage'))){Set-Variable -Scope Script -Name $pair[1] -Value $driver.FindName($pair[0])}
   $script:driverWindow=$driver
   $script:driverViewMode=$InitialMode;$script:driverLastSnapshot=$null;$script:driverSelectedIds=@{}
  if($InitialMode -eq 'components'){$driver.Title='Компоненты Windows — Garant Store';$driver.FindName('DriverHeading').Text='Компоненты Windows'}
@@ -381,7 +424,15 @@ function Show-DriverModule {
   $script:driverWuRepair.Add_Click({Repair-GSWindowsUpdate})
   $script:driverSource.Add_Click({Open-GSDriverSource})
   $script:driverLocal.Add_Click({Invoke-GSDriverAction 'local'})
-  $script:driverCancel.Add_Click({try{$null=Invoke-GSDriverApi -Path '/api/cancel' -Method 'POST' -Body @{};$script:driverHint.Text='Остановка запрошена'}catch{$script:driverHint.Text=$_.Exception.Message}})
+  $script:driverCancel.Add_Click({
+   $script:driverCancel.IsEnabled=$false
+   try{
+    $answer=Invoke-GSDriverApi -Path '/api/cancel' -Method 'POST' -Body @{}
+    $cancelState=[string](Get-GSDriverProperty $answer 'state' '')
+    if($cancelState -eq 'idle'){$script:driverHint.Text='Нет работающей операции — останавливать нечего.'}
+    else{$script:driverHint.Text='Остановка запрошена. Дождитесь завершения текущего шага.'}
+   }catch{$script:driverCancel.IsEnabled=$true;$script:driverHint.Text=$_.Exception.Message}
+  })
   $script:driverDevices.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent,[System.Windows.RoutedEventHandler]{Update-GSDriverActionVisibility $true $script:driverActionBusy},$true)
   $script:driverSelectAll.Add_Click({Toggle-GSDriverSelection})
   $script:driverViewAll.Add_Click({if($script:driverViewMode -eq 'inventory'){Set-GSDriverViewMode 'attention'}else{Set-GSDriverViewMode 'inventory'}})
@@ -389,6 +440,7 @@ function Show-DriverModule {
   $script:driverToggleLog.Add_Click({Toggle-GSDriverLogPanel})
   $script:driverOpenFolder.Add_Click({try{$null=Invoke-GSDriverApi -Path '/api/open-drivers' -Method 'POST' -Body @{} }catch{$script:driverHint.Text=$_.Exception.Message}})
   $script:driverDiagnostics.Add_Click({Save-GSDriverDiagnostics})
+  if($script:driverSoundTest){$script:driverSoundTest.Add_Click({Test-GSDriverSpeakers})}
   $script:driverClose.Add_Click({$driver.Close()})
   $driver.Add_Closing({
    if($script:driverPoll){$script:driverPoll.Stop()}

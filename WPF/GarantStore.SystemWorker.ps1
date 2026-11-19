@@ -15,8 +15,13 @@ try {
  # Current engine data root first; the per-user location is read for history written by older builds.
  $history=@()
  foreach($historyRoot in @((Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'GarantStoreEngine'),(Join-Path $env:LOCALAPPDATA 'Garant Store\Drivers'))){
-  $historyPath=Join-Path $historyRoot ('Devices\'+$profile.localId+'\sessions.json')
-  if(Test-Path -LiteralPath $historyPath){try{$history=@(Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8|ConvertFrom-Json);break}catch{}}
+  # Stable ID first; the pre-migration ID keeps older per-user history readable.
+  foreach($historyId in @($profile.localId,$profile.legacyLocalId)|Where-Object{$_}){
+   $historyPath=Join-Path $historyRoot ('Devices\'+$historyId+'\sessions.json')
+   if(Test-Path -LiteralPath $historyPath){try{$history=@(Get-Content -LiteralPath $historyPath -Raw -Encoding UTF8|ConvertFrom-Json)}catch{}}
+   if($history.Count){break}
+  }
+  if($history.Count){break}
  }
  $profile|Add-Member -NotePropertyName history -NotePropertyValue ($history)
  # Plain-language first page: model, CPU, GPU, RAM, storage, panel, battery.

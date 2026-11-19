@@ -3,6 +3,9 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'UpdateCatalog.ps1')
 . (Join-Path $PSScriptRoot 'Catalog.ps1')
+$script:GSDeviceOutcome=@{}
+$script:LastFetchOutcome=''
+$script:GSBlockedLogged=@{}
 $script:Task = [ordered]@{scanned=$false;running=$true; action=$Action; phase='Подготовка'; message='Запуск'; total=0; remaining=0; finished=0; downloaded=0; errors=0; bytes=0; expectedBytes=0; speedBps=0; etaSec=-1; percent=-1; currentIndex=0; packagesTotal=0; resumedBytes=0; current=''; actionTargetIds=@(); stageTimings=@{};systemProfile=$null;started=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); updatedAt=(Get-Date).ToString('HH:mm:ss'); finishedAt=''; lastError=''; needReboot=$false}
 function Write-Status([string]$phase,[string]$message) {
   $script:Task.phase=$phase; $script:Task.message=$message; $script:Task.updatedAt=(Get-Date).ToString('HH:mm:ss')
@@ -96,6 +99,13 @@ function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long
   $diagnostics=Join-Path $script:StateDir 'curl_diagnostics.log'
   $proxy=Get-ProxyUrl
   $resumeDisabled=$false
+  $blockedReason=Test-GSSourceBlocked -Path $script:GSSourceHealthPath -Url $url
+  if($blockedReason){
+    $script:LastFetchOutcome=if($blockedReason -eq 'нет связи'){'NetworkError'}else{'SourceUnavailable'}
+    $sourceHost=Get-GSSourceHost $url
+    if(-not $script:GSBlockedLogged.ContainsKey($sourceHost)){$script:GSBlockedLogged[$sourceHost]=$true;Log ('Источник '+$sourceHost+' временно не опрашивается ('+$blockedReason+'): повторные запросы приостановлены.')}
+    return $false
+  }
   $maxAttempts=if($isHtml){2}else{3}
   $curlRetries=if($isHtml){'0'}else{'1'}
   for ($attempt=1; $attempt -le $maxAttempts; $attempt++) {
@@ -177,6 +187,12 @@ function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long
     if($meta -match '(?i)CONTENT_TYPE=([^;\s]+)'){$contentType=[string]$Matches[1]}
     $contentRange=''
     if(Test-Path -LiteralPath $headers){try{$headerText=[System.IO.File]::ReadAllText($headers);$ranges=[regex]::Matches($headerText,'(?im)^Content-Range:\s*(.+)$');if($ranges.Count){$contentRange=[string]$ranges[$ranges.Count-1].Groups[1].Value.Trim()}}catch{}}
+    $fetchClass=Register-GSSourceResult -Path $script:GSSourceHealthPath -Url $url -HttpCode $httpCode -CurlCode $code
+    $script:LastFetchOutcome=switch($fetchClass){'Ok'{'Ok'}'Blocked'{'SourceUnavailable'}'RateLimited'{'SourceUnavailable'}'NetworkError'{'NetworkError'}'NotFound'{'NotFound'}default{'Failed'}}
+    if ($fetchClass -in @('Blocked','RateLimited')) {
+      Log ('Источник '+(Get-GSSourceHost $url)+' отклоняет автоматические запросы (HTTP '+$httpCode+'). Это не значит, что драйвера нет: запросы к источнику приостановлены, используются другие источники.')
+      return $false
+    }
     if (Test-GSDownloadResponse $code $httpCode $contentType $received $isHtml $knownSize $existing $contentRange) {
       if ($knownSize -gt 0 -and $received -ne $knownSize) {Log "Размер не совпадает: $received / $knownSize байт; продолжим загрузку"}
       else {
@@ -210,14 +226,33 @@ function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long
   }
   return $false
 }
-function Install-MatchingInf([string]$folder,$targets) {
+function Install-MatchingInf([string]$folder,$targets,[string]$PackageName='') {
+  # One best INF per device, chosen from parsed model sections (exact Hardware ID
+  # of THAT device, applicable architecture/build, same device class, no FORCED
+  # packages). Rollback snapshot before, PnP/audio verification after.
   $infs=@(Get-ChildItem -Path $folder -Filter '*.inf' -Recurse -File -ErrorAction SilentlyContinue)
-  $matchList=New-Object System.Collections.Generic.List[string]
-  foreach ($inf in $infs) {
-    if (Test-InfMatchesTargets $inf.FullName $targets) {$matchList.Add($inf.FullName)}
+  if(!$infs.Count){return}
+  $arch=if([Environment]::Is64BitOperatingSystem){'x64'}else{'x86'}
+  $build=[Environment]::OSVersion.Version.Build
+  $models=@(foreach($inf in $infs){try{Get-GSInfModel -Path $inf.FullName -Architecture $arch -Build $build}catch{Log ('INF не прочитан: '+$inf.Name+' — '+$_.Exception.Message)}})
+  $plan=[ordered]@{}
+  foreach($t in @($targets)){
+    $sel=Select-GSInfForDevice -Device $t -Models $models -PackageName $PackageName
+    if($null -eq $sel.Model){
+      if($PackageName){Log ([string]$t.name+': '+$sel.Reason);$script:GSDeviceOutcome[[string]$t.instanceId]='Incompatible'}
+      continue
+    }
+    Log ([string]$t.name+': '+(Split-Path $sel.Model.Path -Leaf)+' — '+$sel.Reason+' ('+$sel.MatchedId+')')
+    if(-not $plan.Contains($sel.Model.Path)){$plan[$sel.Model.Path]=New-Object System.Collections.Generic.List[object]}
+    $plan[$sel.Model.Path].Add($t)
   }
-  Log "Найдено INF: $($infs.Count), совпали по Hardware ID: $($matchList.Count)"
-  foreach ($inf in $matchList) {
+  Log "Найдено INF: $($infs.Count), выбрано для установки: $($plan.Count)"
+  if(!$plan.Count){return}
+  $planned=@($plan.Values|ForEach-Object{$_})
+  try{$snapshot=Save-GSRollbackSnapshot -Targets $planned -Directory (Join-Path $script:StateDir 'Rollback');if($snapshot){Log ('Сведения для отката сохранены: '+(Split-Path $snapshot -Leaf))}}catch{Log ('Снимок для отката не сохранён: '+$_.Exception.Message)}
+  $audio=@($planned|Where-Object{Test-GSAudioDevice $_})
+  $audioBefore=if($audio.Count){Get-GSAudioHealth}else{$null}
+  foreach ($inf in $plan.Keys) {
     Write-Status 'Установка' (Split-Path $inf -Leaf)
     Log "Установка INF: $(Split-Path $inf -Leaf)"
     $out=Join-Path $script:StateDir 'pnputil_out.txt'
@@ -231,10 +266,18 @@ function Install-MatchingInf([string]$folder,$targets) {
     if ($content) {Log (($content -split '\r?\n' | Where-Object {$_ -match 'installed on device|Установлен.*устройств|Driver package added|успешно|reboot|перезагруз'} | Select-Object -First 8) -join ' | ')}
     if ($code -eq 3010) {$script:Task.needReboot=$true}
     if ($code -notin @(0,259,3010)) {$script:Task.errors++;Log "PnPUtil завершился с кодом $code"}
-    $newTargets=@(Get-CurrentTargets)
-    $script:Task.remaining=$newTargets.Count
-    Save-JsonFile $script:StatusFile $script:Task
   }
+  $newTargets=@(Get-CurrentTargets)
+  $stillIds=@($newTargets|ForEach-Object{[string]$_.instanceId})
+  foreach($t in $planned){$script:GSDeviceOutcome[[string]$t.instanceId]=if($stillIds -contains [string]$t.instanceId){'Failed'}else{'Installed'}}
+  if($audio.Count){
+    $cmp=Compare-GSAudioHealth -Before $audioBefore -After (Get-GSAudioHealth)
+    $script:Task.audioCheck=[ordered]@{state=$cmp.State;endpoints=$cmp.Endpoints;text=$cmp.Text}
+    Log ('Проверка звука: '+$cmp.Text)
+    if($cmp.State -eq 'Regression'){$script:Task.errors++}
+  }
+  $script:Task.remaining=$newTargets.Count
+  Save-JsonFile $script:StatusFile $script:Task
 }
 function Run-Install($packages,$install,$original) {
   $i=0
@@ -326,7 +369,7 @@ function Run-Install($packages,$install,$original) {
         Write-Status 'Распаковка' $filename
         try {Add-Type -AssemblyName System.IO.Compression.FileSystem;[System.IO.Compression.ZipFile]::ExtractToDirectory($path,$folder)} catch {Log "Ошибка распаковки: $($_.Exception.Message)";$script:Task.errors++;continue}
       }
-      Install-MatchingInf $folder $packageTargets
+      Install-MatchingInf $folder $packageTargets $filename
     }
     $newTargets=@(Get-CurrentTargets)
     $script:Task.remaining=$newTargets.Count
@@ -496,7 +539,14 @@ try {
     if($script:actionTargetIds.Count){Write-Status 'Завершено с ошибками' ("Ошибок загрузки/установки: $($script:Task.errors); скачано пакетов: $($script:Task.downloaded); не найден проверенный источник для устройств: $noPackageCount; из выбранных устройств требуют внимания: $($remainingTargets.Count). Смотрите журнал загрузки, распаковки и PnPUtil.")}
     else{Write-Status 'Завершено с ошибками' 'Некоторые пакеты не загружены или не установлены — см. журнал'}
   }
-  elseif($noPackageCount -gt 0){Write-Status 'Завершено с ошибками' ("Для $noPackageCount из $($script:actionTargetIds.Count) выбранных устройств не найден проверенный пакет. Скачано пакетов: $($script:Task.downloaded); осталось проблемных устройств: $($remainingTargets.Count). Проверьте сетевое подключение к CDN DriverPack или выберите пакет производителя.")}
+  elseif($noPackageCount -gt 0 -or @($remainingTargets|Where-Object{$script:GSDeviceOutcome.ContainsKey([string]$_.instanceId)}).Count){
+    $wuMode='';try{$wuMode=[string](Get-CimInstance Win32_Service -Filter "Name='wuauserv'" -ErrorAction Stop).StartMode}catch{}
+    $profileForUrl=Load-JsonFile (Join-Path $script:StateDir 'system-profile.json') $null
+    $vendorUrl=if($profileForUrl){Get-GSVendorSupportUrl ([string]$profileForUrl.manufacturer) ([string]$profileForUrl.model)}else{''}
+    $summaryText=Format-GSOutcomeSummary -Outcomes $script:GSDeviceOutcome -RemainingIds @($remainingTargets|ForEach-Object{[string]$_.instanceId}) -WindowsUpdateState $wuMode -VendorUrl $vendorUrl
+    $script:Task.outcomes=$script:GSDeviceOutcome
+    Write-Status 'Завершено с ошибками' ('Осталось устройств без драйвера: '+$remainingTargets.Count+'. '+$summaryText)
+  }
   elseif($Action -in @('auto','gpu','local') -and $remainingTargets.Count -gt 0 -and -not $script:Task.needReboot){$script:Task.errors++;Write-Status 'Завершено с ошибками' ("Установка завершилась, но после повторного сканирования $($remainingTargets.Count) выбранных устройств всё ещё требуют драйвер. Проверьте журнал INF/PnPUtil и при необходимости перезагрузите Windows.")}
   elseif($Action -eq 'scan' -and $windowsUpdateWarning){Write-Status 'Готово' ("Проверка завершена. Проблемных устройств: $($end.Count). Windows Update сейчас не ответил: $windowsUpdateWarning. Поиск через DRP доступен отдельно.")}
   elseif($Action -eq 'scan' -and $end.Count -eq 0 -and $windowsUpdates.Count -eq 0 -and $librarySuggestions.Count -eq 0){Write-Status 'Готово' 'Драйверы актуальны, обновлений Windows Update и недостающих библиотек не найдено.'}

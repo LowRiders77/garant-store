@@ -180,6 +180,9 @@ try{
  if($diagnostics.Bytes.Length -lt 22){throw 'Diagnostics ZIP could not be downloaded during a worker operation'}
  $cancel=Invoke-TestRequest $endpoint.url '/api/cancel' 'POST' $endpoint.token @{}
  if(-not $cancel.Data.ok){throw 'Cancel action failed'}
+ if([string]$cancel.Data.state -ne 'cancelling'){throw 'First cancel did not report the cancelling state'}
+ $cancelAgain=Invoke-TestRequest $endpoint.url '/api/cancel' 'POST' $endpoint.token @{} -AllowError
+ if(-not $cancelAgain.Data.ok -or @('cancelling','idle') -notcontains [string]$cancelAgain.Data.state){throw 'Repeated cancel was not idempotent'}
  $until=(Get-Date).AddSeconds(12);$completed=$false
  while((Get-Date)-lt $until){
   Start-Sleep -Milliseconds 250
@@ -188,6 +191,9 @@ try{
  }
  if(-not $completed){throw 'Worker final state was not observable through /api/status'}
  [IO.File]::WriteAllText((Join-Path $dataRoot 'State\cancel-tested.marker'),'done',[Text.Encoding]::ASCII)
+ $cancelIdle=Invoke-TestRequest $endpoint.url '/api/cancel' 'POST' $endpoint.token @{} -AllowError
+ if([string]$cancelIdle.Data.state -ne 'idle'){throw 'Cancel without a running worker must return state idle'}
+ if(Test-Path -LiteralPath (Join-Path $dataRoot 'State\cancel.flag')){Remove-Item -LiteralPath (Join-Path $dataRoot 'State\cancel.flag') -Force}
  $updateStart=Invoke-TestRequest $endpoint.url '/api/action' 'POST' $endpoint.token @{action='update-scan';ids=@()}
  if(-not $updateStart.Data.ok){throw 'Windows Update scan action did not start'}
  $updateUntil=(Get-Date).AddSeconds(8);$updateState=$null
@@ -230,7 +236,7 @@ try{
  if(Test-Path -LiteralPath (Join-Path $engineRoot 'State')){throw 'Runtime files were written into the read-only engine directory'}
  $null=Invoke-TestRequest $endpoint.url '/api/exit' 'POST' $endpoint.token @{}
  if(-not $serverProcess.WaitForExit(10000)){throw 'Embedded server did not exit cleanly'}
- Write-Host 'Garant-ПО integration gate passed: token required on every route except health, no token in bootstrap or page, compile, initial status, Windows Update scan/install and repair routing, library action, unified selection, network repair, restore-point routing and scan-state preservation, loopback, token, SSE, concurrent API, diagnostics, cancel, external data root, clean shutdown.'
+ Write-Host 'Garant-ПО integration gate passed: token required on every route except health, no token in bootstrap or page, compile, initial status, Windows Update scan/install and repair routing, library action, unified selection, network repair, restore-point routing and scan-state preservation, loopback, token, SSE, concurrent API, diagnostics, idempotent cancel, external data root, clean shutdown.'
 }finally{
  if($serverProcess -and -not $serverProcess.HasExited){try{$null=Invoke-TestRequest $endpoint.url '/api/exit' 'POST' $endpoint.token @{};[void]$serverProcess.WaitForExit(5000)}catch{try{$serverProcess.Kill()}catch{}}}
  Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue

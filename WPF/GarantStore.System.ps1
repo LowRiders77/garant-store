@@ -77,6 +77,113 @@ function Get-GSSystemValue($Object,[string]$Name) {
  if(-not $p -or $null -eq $p.Value -or [string]::IsNullOrWhiteSpace([string]$p.Value)){return 'Не определено'}
  return $p.Value
 }
+function ConvertTo-GSReportDate($Value){
+ if($null -eq $Value){return $null}
+ if($Value -is [datetime]){return $Value.ToLocalTime().ToString('dd.MM.yyyy')}
+ $text=[string]$Value
+ if($text -match '^/Date\((-?\d+)'){return ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$Matches[1])).LocalDateTime.ToString('dd.MM.yyyy')}
+ if($text -match '^(\d{4})(\d{2})(\d{2})\d{6}'){return ($Matches[3]+'.'+$Matches[2]+'.'+$Matches[1])}
+ $parsed=[datetime]::MinValue
+ if([datetime]::TryParse($text,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$parsed)){return $parsed.ToLocalTime().ToString('dd.MM.yyyy')}
+ return $text
+}
+function ConvertTo-GSReportSize($Bytes){
+ $n=0.0
+ if($null -eq $Bytes -or -not [double]::TryParse([string]$Bytes,[ref]$n) -or $n -le 0){return $null}
+ if($n -ge 1TB){return ([math]::Round($n/1TB,2).ToString([Globalization.CultureInfo]::GetCultureInfo('ru-RU'))+' ТБ')}
+ return ([math]::Round($n/1GB,1).ToString([Globalization.CultureInfo]::GetCultureInfo('ru-RU'))+' ГБ')
+}
+function Get-GSReportCode($Map,$Value){
+ if($null -eq $Value){return $null}
+ $text=[string]$Value
+ $code=0
+ if([int]::TryParse($text,[ref]$code)){if($Map.Contains($code)){return $Map[$code]};return ('код '+$code)}
+ return $text
+}
+function ConvertTo-GSReportSpeed($BitsPerSecond){
+ # Win32_NetworkAdapter reports 9223372036854775807 or terabit values for virtual and
+ # disconnected adapters; anything above 400 Gbit/s is not a real link speed.
+ $n=0.0
+ if($null -eq $BitsPerSecond -or -not [double]::TryParse([string]$BitsPerSecond,[ref]$n) -or $n -le 0 -or $n -gt 4e11){return $null}
+ if($n -ge 1e9){return ([math]::Round($n/1e9,1).ToString([Globalization.CultureInfo]::GetCultureInfo('ru-RU'))+' Гбит/с')}
+ return ([math]::Round($n/1e6).ToString()+' Мбит/с')
+}
+function Get-GSReadableDetailRows([string]$Key,$Entries){
+ # Report-only view: the JSON export keeps the raw WMI values.
+ $memoryTypes=@{20='DDR';21='DDR2';22='DDR2 FB-DIMM';24='DDR3';26='DDR4';27='LPDDR';28='LPDDR2';29='LPDDR3';30='LPDDR4';34='DDR5';35='LPDDR5'}
+ $formFactors=@{7='SIMM';8='DIMM (настольный)';12='SO-DIMM (ноутбучный)';13='SRIMM'}
+ $mediaTypes=@{3='HDD';4='SSD';5='SCM'}
+ $busTypes=@{1='SCSI';2='ATAPI';3='ATA';4='IEEE 1394';6='Fibre Channel';7='USB';8='RAID';9='iSCSI';10='SAS';11='SATA';12='SD';13='MMC';15='виртуальный диск';16='Storage Spaces';17='NVMe';18='SCM';19='UFS'}
+ $healthStates=@{0='исправен';1='предупреждение';2='неисправен';5='неизвестно'}
+ $architectures=@{0='x86';5='ARM';6='IA-64';9='x64';12='ARM64'}
+ $netStates=@{0='отключён';1='подключение…';2='подключён';3='отключение…';4='оборудование отсутствует';5='оборудование отключено';6='неисправность оборудования';7='кабель не подключён';8='проверка подлинности';9='подлинность подтверждена';10='ошибка проверки подлинности';11='недопустимый адрес';12='требуются учётные данные'}
+ $ru=[Globalization.CultureInfo]::GetCultureInfo('ru-RU')
+ $rows=New-Object System.Collections.Generic.List[object]
+ $hiddenVirtual=0
+ foreach($e in @($Entries|Where-Object{$null -ne $_})){
+  $p=@{};foreach($property in $e.PSObject.Properties){$p[$property.Name]=$property.Value}
+  $r=[ordered]@{};$skip=$false
+  switch($Key){
+   'operatingSystem'{
+    $r['Система']=$p['Caption'];$r['Версия']=$p['Version'];$r['Разрядность']=$p['OSArchitecture']
+    $r['Установлена']=ConvertTo-GSReportDate $p['InstallDate'];$r['Последняя загрузка']=ConvertTo-GSReportDate $p['LastBootUpTime']
+    $total=0.0;$free=0.0
+    if([double]::TryParse([string]$p['TotalVisibleMemorySize'],[ref]$total) -and $total -gt 0){
+     $r['Оперативная память']=([math]::Round($total/1MB,1).ToString($ru)+' ГБ доступно Windows')
+     if([double]::TryParse([string]$p['FreePhysicalMemory'],[ref]$free)){$r['Свободно']=([math]::Round($free/1MB,1).ToString($ru)+' ГБ')}
+    }
+   }
+   'processors'{
+    $r['Модель']=([string]$p['Name']).Trim();$r['Производитель']=$p['Manufacturer'];$r['Архитектура']=Get-GSReportCode $architectures $p['Architecture'];$r['Сокет']=$p['SocketDesignation']
+    $r['Ядра / потоки']=$(if($p['NumberOfCores']){[string]$p['NumberOfCores']+' / '+[string]$p['NumberOfLogicalProcessors']}else{$null})
+    $max=0.0;if([double]::TryParse([string]$p['MaxClockSpeed'],[ref]$max) -and $max -gt 0){$r['Базовая частота']=([math]::Round($max/1000,2).ToString($ru)+' ГГц')}
+    foreach($cache in @(@('L2CacheSize','Кэш L2'),@('L3CacheSize','Кэш L3'))){$kb=0.0;if([double]::TryParse([string]$p[$cache[0]],[ref]$kb) -and $kb -gt 0){$r[$cache[1]]=$(if($kb -ge 1024){([math]::Round($kb/1024,1)).ToString($ru)+' МБ'}else{[string]$kb+' КБ'})}}
+    if($null -ne $p['LoadPercentage']){$r['Загрузка при снятии отчёта']=[string]$p['LoadPercentage']+' %'}
+   }
+   'motherboard'{$r['Производитель']=$p['Manufacturer'];$r['Модель']=$p['Product'];$r['Ревизия']=$p['Version']}
+   'firmware'{$r['Производитель']=$p['Manufacturer'];$r['Версия']=$p['SMBIOSBIOSVersion'];$r['Дата выпуска']=ConvertTo-GSReportDate $p['ReleaseDate'];$r['SMBIOS']=$(if($null -ne $p['SMBIOSMajorVersion']){[string]$p['SMBIOSMajorVersion']+'.'+[string]$p['SMBIOSMinorVersion']}else{$null})}
+   'memoryModules'{
+    $r['Слот']=$p['DeviceLocator'];$r['Объём']=ConvertTo-GSReportSize $p['Capacity']
+    $type=Get-GSReportCode $memoryTypes $p['SMBIOSMemoryType'];if($type -eq 'код 0'){$type=$null};$r['Тип']=$type
+    $r['Форм-фактор']=$(if([string]$p['FormFactor'] -eq '0'){$null}else{Get-GSReportCode $formFactors $p['FormFactor']})
+    $speed=[int]0;$conf=[int]0;[void][int]::TryParse([string]$p['Speed'],[ref]$speed);[void][int]::TryParse([string]$p['ConfiguredClockSpeed'],[ref]$conf)
+    $r['Частота']=$(if($conf -gt 0 -and $speed -gt 0 -and $conf -ne $speed){[string]$conf+' МТ/с (модуль до '+$speed+' МТ/с)'}elseif($conf -gt 0){[string]$conf+' МТ/с'}elseif($speed -gt 0){[string]$speed+' МТ/с'}else{$null})
+    $r['Производитель']=$p['Manufacturer']
+   }
+   'physicalDisks'{
+    $r['Модель']=$p['FriendlyName'];$r['Объём']=ConvertTo-GSReportSize $p['Size']
+    $media=Get-GSReportCode $mediaTypes $p['MediaType'];if($media -in @('код 0','Unspecified')){$media='не определён'};$r['Тип']=$media
+    $r['Интерфейс']=Get-GSReportCode $busTypes $p['BusType'];$r['Состояние']=Get-GSReportCode $healthStates $p['HealthStatus']
+   }
+   'volumes'{
+    $r['Раздел']=$p['DeviceID'];$r['Файловая система']=$p['FileSystem']
+    $size=ConvertTo-GSReportSize $p['Size'];$free=ConvertTo-GSReportSize $p['FreeSpace']
+    $r['Объём']=$size;$r['Свободно']=$free
+    $s=0.0;$f=0.0;if([double]::TryParse([string]$p['Size'],[ref]$s) -and $s -gt 0 -and [double]::TryParse([string]$p['FreeSpace'],[ref]$f)){$r['Заполнено']=[string][math]::Round((1-$f/$s)*100)+' %'}
+   }
+   'graphics'{
+    $r['Модель']=$p['Name'];$r['Производитель']=$p['AdapterCompatibility'];$r['Версия драйвера']=$p['DriverVersion'];$r['Дата драйвера']=ConvertTo-GSReportDate $p['DriverDate']
+    $r['Режим экрана']=$(if($p['CurrentHorizontalResolution']){[string]$p['CurrentHorizontalResolution']+'×'+[string]$p['CurrentVerticalResolution']+$(if($p['CurrentRefreshRate']){' @ '+[string]$p['CurrentRefreshRate']+' Гц'}else{''})}else{$null})
+   }
+   'monitors'{$r['Модель']=$p['Name'];$r['Производитель']=$p['Manufacturer']}
+   'network'{
+    $physical=[string]$p['PhysicalAdapter']
+    if($physical -match '^(False|0)$'){$hiddenVirtual++;$skip=$true;break}
+    $state=Get-GSReportCode $netStates $p['NetConnectionStatus']
+    $r['Адаптер']=$p['Name'];$r['Производитель']=$p['Manufacturer'];$r['Состояние']=$state
+    $speed=ConvertTo-GSReportSpeed $p['Speed']
+    $r['Скорость подключения']=$(if([string]$p['NetConnectionStatus'] -ne '2'){'нет подключения'}elseif($speed){$speed}else{'не сообщается адаптером'})
+   }
+   'audio'{$r['Устройство']=$p['Name'];$r['Производитель']=$p['Manufacturer'];$r['Состояние']=$(if([string]$p['Status'] -eq 'OK'){'работает'}elseif($p['Status']){'ошибка ('+[string]$p['Status']+')'}else{$null})}
+   'peripheral'{$r['Устройство']=$p['Name'];$r['Класс']=$p['PNPClass'];$r['Состояние']=$(if([string]$p['Status'] -eq 'OK'){'работает'}elseif($p['Status']){'ошибка ('+[string]$p['Status']+')'}else{$null})}
+   default{foreach($k in $p.Keys){$r[$k]=$p[$k]}}
+  }
+  if($skip){continue}
+  $rows.Add([pscustomobject]$r)
+ }
+ if($hiddenVirtual -gt 0){$rows.Add([pscustomobject][ordered]@{'Виртуальные адаптеры'=([string]$hiddenVirtual+' скрыто (VPN, WAN Miniport, Hyper-V и т. п.: скорость у них условная)')})}
+ return $rows.ToArray()
+}
 function Get-GSSystemCards($Profile,[scriptblock]$GetValue) {
  $cards=New-Object System.Collections.Generic.List[object]
  $summaryRows=Get-GSSystemSummaryRows $Profile
@@ -99,7 +206,7 @@ function Set-GSSystemProfile($State,$Profile,[scriptblock]$FormatCards,[scriptbl
  $detailLabels=[ordered]@{operatingSystem='Windows';processors='Процессоры';motherboard='Материнская плата';firmware='BIOS / UEFI';memoryModules='Модули памяти';physicalDisks='Физические накопители';volumes='Разделы';graphics='Видеокарты';monitors='Мониторы';network='Сеть';audio='Аудио';peripheral='Периферия'}
  $detailLines=foreach($key in $detailLabels.Keys){
   $detailLabels[$key]
-  $entries=@($Profile.details.$key|Where-Object{$null -ne $_})
+  $entries=@(Get-GSReadableDetailRows $key @($Profile.details.$key))
   if(-not $entries.Count){'  Не определено'}
   foreach($entry in $entries){
    foreach($property in $entry.PSObject.Properties){
@@ -131,7 +238,7 @@ function Export-GSSystemProfile($State,[string]$Path,[bool]$FullReport) {
   'Системные службы'=@($snapshot.services)
  }
  $labels=[ordered]@{operatingSystem='Операционная система';processors='Процессоры';motherboard='Материнская плата';firmware='BIOS / UEFI';memoryModules='Модули памяти';physicalDisks='Физические накопители';volumes='Разделы';graphics='Видеокарты';monitors='Мониторы';network='Сетевые адаптеры';audio='Аудио';peripheral='Периферия'}
- foreach($key in $labels.Keys){$sections[$labels[$key]]=@($snapshot.details.$key)}
+ foreach($key in $labels.Keys){$sections[$labels[$key]]=@(Get-GSReadableDetailRows $key @($snapshot.details.$key))}
  if($FullReport){$sections['Идентификация']=@([pscustomobject]@{Имя_ПК=$snapshot.computerName})}
  $extension=[IO.Path]::GetExtension($Path).ToLowerInvariant()
  if($extension -eq '.json'){

@@ -57,7 +57,7 @@ Assert-Equal $n.Graphics 'Intel Iris Xe Graphics (встроенная)' 'Intel 
 Assert-Equal $n.Memory '8GB DDR4 (1x8) 2667MHz' 'Single DDR4 module'
 Assert-Equal $n.Storage 'Kingsand P600 256GB SATA SSD' 'SATA SSD'
 Assert-Equal $n.Display '15.6" 1920×1080 60 Гц, BOE (код BOE0A1B)' 'Panel without part number'
-Assert-Equal $n.Battery 'ёмкость не определена, заряд 55%' 'Battery without capacity data'
+Assert-Equal $n.Battery 'Данные не подтверждены, причина: контроллер не сообщает ёмкость, заряд 55%' 'Battery without capacity data'
 
 $desktop=[pscustomobject]@{
  Manufacturer='Micro-Star International Co., Ltd.';Model='MS-7C02';Version='';Board='';ComputerName='GAMER';PcSystemType=1
