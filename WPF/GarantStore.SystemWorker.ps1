@@ -6,6 +6,16 @@ try {
  $watch=[Diagnostics.Stopwatch]::StartNew()
  $profile=Get-GSComputerProfile
  $profile|Add-Member -NotePropertyName details -NotePropertyValue (Get-GSSystemDetail)
+ # AdapterRAM is a 32-bit WMI field (max 4 GB); attach the real size from the driver key.
+ try{
+  $gpuClassMemory=Get-GSGpuClassMemory
+  foreach($row in @($profile.details.graphics|Where-Object{$null -ne $_})){
+   $vram=Get-GSGpuMemoryInfo -Name ([string]$row.Name) -PnpDeviceId ([string]$row.PNPDeviceID) -AdapterRam $row.AdapterRAM -ClassMemory $gpuClassMemory
+   $row|Add-Member -NotePropertyName VideoMemoryBytes -NotePropertyValue $vram.Bytes -Force
+   $row|Add-Member -NotePropertyName VideoMemoryAtLeast -NotePropertyValue $vram.AtLeast -Force
+   $row|Add-Member -NotePropertyName VideoMemorySource -NotePropertyValue $vram.Source -Force
+  }
+ }catch{}
  $services=@(foreach($name in @('wuauserv','BITS','AppXSvc','ClipSVC','InstallService')){try{$s=Get-Service $name -ErrorAction Stop;[pscustomobject]@{name=$name;status=[string]$s.Status}}catch{[pscustomobject]@{name=$name;status='Не определено'}}})
  $problemCount=try{@(Get-CimInstance Win32_PnPEntity -OperationTimeoutSec 10 -ErrorAction Stop|Where-Object{$_.ConfigManagerErrorCode -ne 0}).Count}catch{$null}
  $driverCount=try{@(Get-CimInstance Win32_PnPSignedDriver -OperationTimeoutSec 10 -ErrorAction Stop).Count}catch{$null}

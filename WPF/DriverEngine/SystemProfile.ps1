@@ -84,10 +84,10 @@ function Get-GSSystemDetail {
     processors=@(Read-GSDetailClass Win32_Processor @('Name','Manufacturer','Architecture','SocketDesignation','NumberOfCores','NumberOfLogicalProcessors','CurrentClockSpeed','MaxClockSpeed','L2CacheSize','L3CacheSize','LoadPercentage'))
     motherboard=@(Read-GSDetailClass Win32_BaseBoard @('Manufacturer','Product','Version'))
     firmware=@(Read-GSDetailClass Win32_BIOS @('Manufacturer','SMBIOSBIOSVersion','ReleaseDate','SMBIOSMajorVersion','SMBIOSMinorVersion'))
-    memoryModules=@(Read-GSDetailClass Win32_PhysicalMemory @('DeviceLocator','Capacity','ConfiguredClockSpeed','Speed','SMBIOSMemoryType','FormFactor','Manufacturer'))
+    memoryModules=@(Read-GSDetailClass Win32_PhysicalMemory @('DeviceLocator','BankLabel','Capacity','ConfiguredClockSpeed','Speed','SMBIOSMemoryType','FormFactor','Manufacturer','PartNumber'))
     physicalDisks=@(Read-GSDetailClass MSFT_PhysicalDisk @('FriendlyName','Manufacturer','Size','MediaType','BusType','HealthStatus') 'root/Microsoft/Windows/Storage')
     volumes=@(Read-GSDetailClass Win32_LogicalDisk @('DeviceID','FileSystem','Size','FreeSpace') 'root/cimv2' 'DriveType=3')
-    graphics=@(Read-GSDetailClass Win32_VideoController @('Name','AdapterCompatibility','DriverVersion','DriverDate','CurrentHorizontalResolution','CurrentVerticalResolution','CurrentRefreshRate'))
+    graphics=@(Read-GSDetailClass Win32_VideoController @('Name','AdapterCompatibility','DriverVersion','DriverDate','CurrentHorizontalResolution','CurrentVerticalResolution','CurrentRefreshRate','PNPDeviceID','AdapterRAM'))
     monitors=@(Read-GSDetailClass WmiMonitorID @('UserFriendlyName','ManufacturerName','Active') 'root/wmi' 'Active=TRUE'|ForEach-Object {
       [pscustomobject]@{Name=(-join ($_.UserFriendlyName|Where-Object{$_}|ForEach-Object{[char]$_}));Manufacturer=(-join ($_.ManufacturerName|Where-Object{$_}|ForEach-Object{[char]$_}))}
     })

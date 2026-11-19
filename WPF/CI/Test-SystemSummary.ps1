@@ -21,6 +21,21 @@ Assert-Equal $panel.Width 1920 'EDID width';Assert-Equal $panel.Height 1080 'EDI
 Assert-Equal $panel.PanelText 'N156HCA-EAB' 'EDID panel part number'
 Assert-Equal $panel.DiagonalInches 15.3 'EDID diagonal'
 if($null -ne (ConvertFrom-GSEdid ([byte[]](1..128)))){throw 'Garbage EDID was parsed'}
+# High-refresh desktop monitor (field: LHC N27SH2 shown as "60 Гц" while Windows ran it at 240 Hz).
+# Base block: preferred 1920x1080@60 (148.5 MHz); CTA-861 extension: 1920x1080@240 and 1280x720@300.
+function New-TestDtd([int]$ClockTenKHz,[int]$W,[int]$H,[int]$HBlank,[int]$VBlank){
+ [byte[]]@(($ClockTenKHz -band 255),($ClockTenKHz -shr 8),($W -band 255),($HBlank -band 255),((($W -shr 8) -shl 4) -bor ($HBlank -shr 8)),($H -band 255),($VBlank -band 255),((($H -shr 8) -shl 4) -bor ($VBlank -shr 8)),0,0,0,0,0,0,0,0,0,0)
+}
+$hr=New-Object byte[] 256
+for($i=0;$i -lt 8;$i++){$hr[$i]=[byte]$header[$i]}
+$hr[8]=0x31;$hr[9]=0x03;$hr[21]=60;$hr[22]=34;$hr[126]=1
+$d=New-TestDtd 14850 1920 1080 280 45;for($i=0;$i -lt 18;$i++){$hr[54+$i]=$d[$i]}
+$hr[128]=2;$hr[129]=3;$hr[130]=4
+$d=New-TestDtd 56410 1920 1080 160 50;for($i=0;$i -lt 18;$i++){$hr[132+$i]=$d[$i]}
+$d=New-TestDtd 33000 1280 720 370 30;for($i=0;$i -lt 18;$i++){$hr[150+$i]=$d[$i]}
+$fast=ConvertFrom-GSEdid $hr
+Assert-Equal $fast.Width 1920 'High-refresh EDID width'
+Assert-Equal $fast.Refresh 240 'Maximum refresh at native resolution from the CTA extension (not the 60 Hz preferred timing, not the 720p mode)'
 
 $asus=[pscustomobject]@{
  Manufacturer='ASUSTeK COMPUTER INC.';Model='Vivobook Go E1504FA_E1504FA';Version='1.0';Board='ASUSTeK COMPUTER INC. E1504FA';ComputerName='GARANT-PC';PcSystemType=2
@@ -118,6 +133,61 @@ Assert-Equal $m.Storage 'BIWIN NV7400 1TB NVMe SSD' 'USB enclosure excluded'
 if($m.Graphics -notmatch 'RTX 5060'){throw ('Collected GPU: '+$m.Graphics)}
 if($m.Memory -notmatch '^16GB DDR4 \(2x8\)'){throw ('Collected RAM: '+$m.Memory)}
 if($m.Display -match 'Не определено'){throw ('Monitor lost: '+$m.Display)}
+# --- Video memory (field: RTX 5060 8 GB reported as "4GB") ---------------------------
+# AdapterRAM is uint32: 4293918720 for every card with >= 4 GB. It must never become the size.
+$rtxPnp='PCI\VEN_10DE&DEV_2D05&SUBSYS_00001462&REV_A1\4&2B1A7F3C&0&0019'
+$script:fakeRegistry=@{}
+function Read-GSRegistryValue([string]$SubKey,[string]$Name){ $k=$SubKey+'|'+$Name; if($script:fakeRegistry.ContainsKey($k)){return $script:fakeRegistry[$k]}; return $null }
+function Get-GSRegistrySubKeyNames([string]$SubKey){ @($script:fakeRegistry.Keys|Where-Object{$_ -like ($SubKey+'\*')}|ForEach-Object{($_.Substring($SubKey.Length+1) -split '[\\|]')[0]}|Sort-Object -Unique) }
+$script:smiCalls=0;$script:fakeSmi=@{}
+function Invoke-GSNvidiaSmi { $script:smiCalls++; return $script:fakeSmi }
+function Get-CimInstance {
+ [CmdletBinding()]param([string]$ClassName,[string]$Namespace,[int]$OperationTimeoutSec,[string]$Filter)
+ switch($ClassName){
+  'Win32_ComputerSystem'{[pscustomobject]@{Manufacturer='Micro-Star International Co., Ltd.';Model='MS-7C95';PCSystemType=1}}
+  'Win32_BaseBoard'{[pscustomobject]@{Manufacturer='Micro-Star International Co., Ltd.';Product='B550M PRO-VDH (MS-7C95)'}}
+  'Win32_Processor'{[pscustomobject]@{Name='AMD Ryzen 5 5600X 6-Core Processor';NumberOfCores=6;NumberOfLogicalProcessors=12}}
+  'Win32_VideoController'{[pscustomobject]@{Name='NVIDIA GeForce RTX 5060';AdapterRAM=[uint32]4293918720;PNPDeviceID=$rtxPnp;CurrentHorizontalResolution=1920;CurrentVerticalResolution=1080;CurrentRefreshRate=240}}
+  'WmiMonitorConnectionParams'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';VideoOutputTechnology=[uint32]10}}
+  'WmiMonitorID'{[pscustomobject]@{InstanceName='DISPLAY\LHC0001\5&1_0';ManufacturerName=[uint16[]][char[]]'LHC';ProductCodeID=[uint16[]][char[]]'0001';UserFriendlyName=[uint16[]][char[]]'N27SH2'}}
+  default{}
+ }
+}
+$classRoot='SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+function Invoke-VramCase([hashtable]$Registry,[hashtable]$Smi){
+ $script:fakeRegistry=$Registry;$script:fakeSmi=$Smi;$script:GSSmiCache=$null;$script:smiCalls=0
+ return (New-GSSystemSummary (Get-GSSummaryRaw)).Graphics
+}
+# 1. Exact driver key of this adapter (Enum\<PNPDeviceID>\Driver -> Class\...\0001), REG_QWORD.
+$g=Invoke-VramCase @{("SYSTEM\CurrentControlSet\Enum\$rtxPnp|Driver")='{4d36e968-e325-11ce-bfc1-08002be10318}\0001';($classRoot+'\0001|HardwareInformation.qwMemorySize')=[int64]8589934592} @{}
+Assert-Equal $g 'NVIDIA GeForce RTX 5060 8GB' 'VRAM from the exact driver key'
+# EDID with a 60 Hz preferred timing only; Windows runs the panel at 1920x1080@240.
+$script:baseEdid=$edid
+function Get-ItemProperty { [CmdletBinding()]param([string]$LiteralPath) if($LiteralPath -like '*LHC0001*'){$e=[byte[]]$script:baseEdid.Clone();$e[8]=0x31;$e[9]=0x03;return [pscustomobject]@{EDID=$e}}; if($LiteralPath -like '*CentralProcessor*'){return [pscustomobject]@{ProcessorNameString='AMD Ryzen 5 5600X 6-Core Processor'}}; throw 'not found' }
+$d240=New-GSSystemSummary (Get-GSSummaryRaw)
+if($d240.Display -notmatch '1920×1080 240 Гц'){throw ('Active 240 Hz mode lost: '+$d240.Display)}
+if($script:smiCalls -ne 0){throw 'nvidia-smi must not run when the registry answered'}
+# 2. Enum key unreadable, class key found by DriverDesc; an unreadable sibling does not abort the scan.
+$g=Invoke-VramCase @{($classRoot+'\0000|DriverDesc')='AMD Radeon RX 6600';($classRoot+'\0000|HardwareInformation.qwMemorySize')=[int64]8589934592;($classRoot+'\0001|DriverDesc')='NVIDIA GeForce RTX 5060';($classRoot+'\0001|HardwareInformation.qwMemorySize')=[int64]8589934592;($classRoot+'\Properties|Security')=$null} @{}
+Assert-Equal $g 'NVIDIA GeForce RTX 5060 8GB' 'VRAM from the class key by name'
+# 3. No registry value at all: nvidia-smi (MiB).
+$g=Invoke-VramCase @{} @{'NVIDIA GeForce RTX 5060'=[double]8151}
+Assert-Equal $g 'NVIDIA GeForce RTX 5060 8GB' 'VRAM from nvidia-smi'
+# 4. Only the capped WMI value: a lower bound, never "4GB".
+$g=Invoke-VramCase @{} @{}
+Assert-Equal $g 'NVIDIA GeForce RTX 5060 (видеопамять не менее 4GB)' 'Capped AdapterRAM is shown as a lower bound'
+# 5. A capped 32-bit registry DWORD is not trusted either.
+$g=Invoke-VramCase @{("SYSTEM\CurrentControlSet\Enum\$rtxPnp|Driver")='{4d36e968-e325-11ce-bfc1-08002be10318}\0001';($classRoot+'\0001|HardwareInformation.MemorySize')=[byte[]](0x00,0x00,0xF0,0xFF)} @{}
+Assert-Equal $g 'NVIDIA GeForce RTX 5060 (видеопамять не менее 4GB)' 'Capped registry DWORD is a lower bound'
+# Unit cases: 12 GB QWORD, 2 GB DWORD (below the cap is exact), integrated 128 MB from WMI.
+$v=Get-GSGpuMemoryInfo -Name 'NVIDIA GeForce RTX 3060' -PnpDeviceId 'PCI\X' -AdapterRam ([uint32]4293918720) -ClassMemory @{'NVIDIA GeForce RTX 3060'=[pscustomobject]@{Bytes=[double]12884901888;Source='registry-qw'}} -SmiMemory @{}
+Assert-Equal (Format-GSVideoMemory $v) '12 ГБ' '12 GB QWORD'
+$v=Get-GSGpuMemoryInfo -Name 'NVIDIA GeForce GT 1030' -PnpDeviceId '' -AdapterRam $null -ClassMemory @{'NVIDIA GeForce GT 1030'=[pscustomobject]@{Bytes=[double]2147483648;Source='registry-dword'}} -SmiMemory @{}
+Assert-Equal (Format-GSVideoMemory $v) '2 ГБ' '2 GB DWORD below cap'
+$v=Get-GSGpuMemoryInfo -Name 'Intel(R) UHD Graphics 630' -PnpDeviceId '' -AdapterRam ([uint32]1073741824) -ClassMemory @{} -SmiMemory @{}
+Assert-Equal (Format-GSVideoMemory $v) '1 ГБ' 'Small AdapterRAM is exact'
+Assert-Equal (Format-GSVideoMemory ([pscustomobject]@{Bytes=[double]4GB;AtLeast=$true})) 'не менее 4 ГБ (точный объём Windows не сообщила)' 'Lower-bound wording'
+Assert-Equal (ConvertTo-GSRegistryBytes ([int]-1048576)) '4293918720' 'Signed DWORD from the registry is read as unsigned'
 # Laptop panel reported as internal (0x80000000) must not throw either.
 function Get-CimInstance {
  [CmdletBinding()]param([string]$ClassName,[string]$Namespace,[int]$OperationTimeoutSec,[string]$Filter)
@@ -137,4 +207,4 @@ Assert-Equal (ConvertTo-GSStorageCode ([uint16]7) 'Bus') 7 'Numeric bus kept'
 Assert-Equal (ConvertTo-GSStorageCode 'HDD' 'Media') 3 'Media name mapped'
 Assert-Equal (Format-GSModelName 'QIYIDA' 'X79 (INTEL Xeon E5/Corei7 DMI2 - C600/C200 Cipset)' '' '' 'GARANT-PC') 'QIYIDA X79' 'Chinese board essay dropped'
 Assert-Equal (ConvertTo-GSSafeFileName 'QIYIDA X79 (INTEL Xeon E5 Corei7 DMI2 - C600 C200 Cipset') 'QIYIDA X79' 'Unbalanced bracket dropped'
-Write-Host 'System summary gate passed: model names, CPU incl. engineering samples, GPU VRAM/integrated, RAM kit format, internal storage only, EDID panel, battery health, safe file name.'
+Write-Host 'System summary gate passed: model names, CPU incl. engineering samples, GPU VRAM/integrated, VRAM above the 32-bit WMI cap (driver key, class key, nvidia-smi, lower bound), RAM kit format, internal storage only, EDID panel, battery health, safe file name.'

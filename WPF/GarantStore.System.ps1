@@ -143,12 +143,19 @@ function Get-GSReadableDetailRows([string]$Key,$Entries){
    'motherboard'{$r['Производитель']=$p['Manufacturer'];$r['Модель']=$p['Product'];$r['Ревизия']=$p['Version']}
    'firmware'{$r['Производитель']=$p['Manufacturer'];$r['Версия']=$p['SMBIOSBIOSVersion'];$r['Дата выпуска']=ConvertTo-GSReportDate $p['ReleaseDate'];$r['SMBIOS']=$(if($null -ne $p['SMBIOSMajorVersion']){[string]$p['SMBIOSMajorVersion']+'.'+[string]$p['SMBIOSMinorVersion']}else{$null})}
    'memoryModules'{
-    $r['Слот']=$p['DeviceLocator'];$r['Объём']=ConvertTo-GSReportSize $p['Capacity']
+    # MSI/ASUS AM4 boards report "DIMM 1" for both channels; the bank label tells them apart.
+    $slot=[string]$p['DeviceLocator'];$bank=[string]$p['BankLabel']
+    if($bank -match '(?i)CHANNEL\s*([A-H])'){$bank='канал '+$Matches[1].ToUpperInvariant()}elseif($bank -match '(?i)^BANK\s*\d+$' -and $slot){$bank=''}
+    $r['Слот']=$(if($slot -and $bank){$slot+' · '+$bank}elseif($slot){$slot}else{$bank})
+    $r['Объём']=ConvertTo-GSReportSize $p['Capacity']
     $type=Get-GSReportCode $memoryTypes $p['SMBIOSMemoryType'];if($type -eq 'код 0'){$type=$null};$r['Тип']=$type
     $r['Форм-фактор']=$(if([string]$p['FormFactor'] -eq '0'){$null}else{Get-GSReportCode $formFactors $p['FormFactor']})
     $speed=[int]0;$conf=[int]0;[void][int]::TryParse([string]$p['Speed'],[ref]$speed);[void][int]::TryParse([string]$p['ConfiguredClockSpeed'],[ref]$conf)
     $r['Частота']=$(if($conf -gt 0 -and $speed -gt 0 -and $conf -ne $speed){[string]$conf+' МТ/с (модуль до '+$speed+' МТ/с)'}elseif($conf -gt 0){[string]$conf+' МТ/с'}elseif($speed -gt 0){[string]$speed+' МТ/с'}else{$null})
-    $r['Производитель']=$p['Manufacturer']
+    $maker=([string]$p['Manufacturer']).Trim()
+    $r['Производитель']=$(if($maker -match '(?i)^(unknown|undefined|not specified|manufacturer\d*|0+|[0-9A-F]{4})?$'){$null}else{$maker})
+    $part=([string]$p['PartNumber']).Trim()
+    if($part -and $part -notmatch '(?i)^(unknown|undefined|0+)$'){$r['Маркировка']=$part}
    }
    'physicalDisks'{
     $r['Модель']=$p['FriendlyName'];$r['Объём']=ConvertTo-GSReportSize $p['Size']
@@ -162,7 +169,7 @@ function Get-GSReadableDetailRows([string]$Key,$Entries){
     $s=0.0;$f=0.0;if([double]::TryParse([string]$p['Size'],[ref]$s) -and $s -gt 0 -and [double]::TryParse([string]$p['FreeSpace'],[ref]$f)){$r['Заполнено']=[string][math]::Round((1-$f/$s)*100)+' %'}
    }
    'graphics'{
-    $r['Модель']=$p['Name'];$r['Производитель']=$p['AdapterCompatibility'];$r['Версия драйвера']=$p['DriverVersion'];$r['Дата драйвера']=ConvertTo-GSReportDate $p['DriverDate']
+    $r['Модель']=$p['Name'];$r['Производитель']=$p['AdapterCompatibility'];$r['Видеопамять']=$(if($p.ContainsKey('VideoMemoryBytes')){Format-GSVideoMemory ([pscustomobject]@{Bytes=$p['VideoMemoryBytes'];AtLeast=[bool]$p['VideoMemoryAtLeast']})}else{$null});$r['Версия драйвера']=$p['DriverVersion'];$r['Дата драйвера']=ConvertTo-GSReportDate $p['DriverDate']
     $r['Режим экрана']=$(if($p['CurrentHorizontalResolution']){[string]$p['CurrentHorizontalResolution']+'×'+[string]$p['CurrentVerticalResolution']+$(if($p['CurrentRefreshRate']){' @ '+[string]$p['CurrentRefreshRate']+' Гц'}else{''})}else{$null})
    }
    'monitors'{$r['Модель']=$p['Name'];$r['Производитель']=$p['Manufacturer']}
@@ -184,6 +191,20 @@ function Get-GSReadableDetailRows([string]$Key,$Entries){
  if($hiddenVirtual -gt 0){$rows.Add([pscustomobject][ordered]@{'Виртуальные адаптеры'=([string]$hiddenVirtual+' скрыто (VPN, WAN Miniport, Hyper-V и т. п.: скорость у них условная)')})}
  return $rows.ToArray()
 }
+function Get-GSReadableServiceRows($Services){
+ $names=@{wuauserv='Центр обновления Windows';BITS='Фоновая передача (BITS)';AppXSvc='Развёртывание приложений (AppX)';ClipSVC='Лицензии Microsoft Store (ClipSVC)';InstallService='Установка приложений Microsoft Store'}
+ $row=[ordered]@{}
+ foreach($s in @($Services|Where-Object{$null -ne $_})){
+  if($s -is [string]){continue}
+  $id=[string]$s.name;$state=[string]$s.status
+  $label=if($names.ContainsKey($id)){$names[$id]}else{$id}
+  # These services start on demand: "stopped" is their normal idle state, not a fault.
+  $text=switch($state){'Running'{'работает'};'Stopped'{'не запущена (запускается по требованию)'};'NotFound'{'отсутствует'};'StartPending'{'запускается'};'StopPending'{'останавливается'};default{$state}}
+  if($label){$row[$label]=$text}
+ }
+ if(-not $row.Count){return @()}
+ return @([pscustomobject]$row)
+}
 function Get-GSSystemCards($Profile,[scriptblock]$GetValue) {
  $cards=New-Object System.Collections.Generic.List[object]
  $summaryRows=Get-GSSystemSummaryRows $Profile
@@ -195,7 +216,8 @@ function Get-GSSystemCards($Profile,[scriptblock]$GetValue) {
  foreach($disk in @($Profile.disks)){$cards.Add([pscustomobject]@{Title='Накопитель';Text=([string]$disk.model+"`n"+[math]::Round($disk.sizeBytes/1GB,1)+' ГБ • интерфейс: '+[string]$disk.interface+"`nТип SSD/HDD: не определён")})}
  $cards.Add([pscustomobject]@{Title='Драйверы';Text=('Установленных: '+(& $GetValue $Profile 'installedDriverCount')+"`nПроблемных устройств: "+(& $GetValue $Profile 'problemDeviceCount'))})
  $services=& $GetValue $Profile 'services'
- $cards.Add([pscustomobject]@{Title='Службы';Text=(@($services|ForEach-Object{if($_ -is [string]){$_}else{[string]$_.name+': '+[string]$_.status}}) -join "`n")})
+ $serviceRows=@(Get-GSReadableServiceRows @($services))
+ $cards.Add([pscustomobject]@{Title='Службы';Text=$(if($serviceRows.Count){(@($serviceRows[0].PSObject.Properties|ForEach-Object{$_.Name+': '+[string]$_.Value}) -join "`n")}else{'Не определено'})})
  $history=& $GetValue $Profile 'history'
  $cards.Add([pscustomobject]@{Title='История диагностики';Text=(@($history|Select-Object -First 5|ForEach-Object{if($_ -is [string]){$_}else{[string]$_.capturedUtc+' • проблем: '+[string]$_.problemCount}}) -join "`n")})
  return $cards.ToArray()
@@ -235,7 +257,7 @@ function Export-GSSystemProfile($State,[string]$Path,[bool]$FullReport) {
   'Сводка'=@(Get-GSSystemSummaryRows $State.Profile)
   'Windows'=@([pscustomobject][ordered]@{'Система'=$snapshot.edition;'Версия'=$snapshot.displayVersion;'Сборка'=$snapshot.build})
   'Драйверы'=@([pscustomobject]@{Установлено=$snapshot.installedDriverCount;Проблемных=$snapshot.problemDeviceCount})
-  'Системные службы'=@($snapshot.services)
+  'Системные службы'=@(Get-GSReadableServiceRows @($snapshot.services))
  }
  $labels=[ordered]@{operatingSystem='Операционная система';processors='Процессоры';motherboard='Материнская плата';firmware='BIOS / UEFI';memoryModules='Модули памяти';physicalDisks='Физические накопители';volumes='Разделы';graphics='Видеокарты';monitors='Мониторы';network='Сетевые адаптеры';audio='Аудио';peripheral='Периферия'}
  foreach($key in $labels.Keys){$sections[$labels[$key]]=@(Get-GSReadableDetailRows $key @($snapshot.details.$key))}

@@ -52,9 +52,27 @@ Assert-Equal 'disconnected speed' 'нет подключения' $net[1].'Ск�
 Assert-Equal 'implausible speed' 'не сообщается адаптером' $net[2].'Скорость подключения'
 if([string]$net[3].'Виртуальные адаптеры' -notmatch '^2 скрыто'){throw 'Virtual adapters must be summarised, not listed'}
 
+$gfx=@(Get-GSReadableDetailRows 'graphics' @(
+ [pscustomobject]@{Name='NVIDIA GeForce RTX 5060';AdapterCompatibility='NVIDIA';DriverVersion='32.0.16.1742';DriverDate='20260930000000.000000-000';CurrentHorizontalResolution=1920;CurrentVerticalResolution=1080;CurrentRefreshRate=240;PNPDeviceID='PCI\VEN_10DE';AdapterRAM=4293918720;VideoMemoryBytes=8589934592;VideoMemoryAtLeast=$false;VideoMemorySource='registry-qw'},
+ [pscustomobject]@{Name='NVIDIA GeForce RTX 5060';AdapterCompatibility='NVIDIA';DriverVersion='1';DriverDate='';CurrentHorizontalResolution=$null;CurrentVerticalResolution=$null;CurrentRefreshRate=$null;PNPDeviceID='';AdapterRAM=4293918720;VideoMemoryBytes=4294967296;VideoMemoryAtLeast=$true;VideoMemorySource='wmi-capped'},
+ [pscustomobject]@{Name='Old profile';AdapterCompatibility='NVIDIA';DriverVersion='1';DriverDate='';CurrentHorizontalResolution=$null;CurrentVerticalResolution=$null;CurrentRefreshRate=$null}))
+Assert-Equal 'vram real' '8 ГБ' $gfx[0].'Видеопамять'
+Assert-Equal 'vram lower bound' 'не менее 4 ГБ (точный объём Windows не сообщила)' $gfx[1].'Видеопамять'
+if($null -ne $gfx[2].'Видеопамять'){throw 'Without a measured size the report must not invent one'}
+if(@($gfx[0].PSObject.Properties.Name) -contains 'AdapterRAM'){throw 'Capped AdapterRAM must not reach the readable report'}
+$dimm=@(Get-GSReadableDetailRows 'memoryModules' @(
+ [pscustomobject]@{DeviceLocator='DIMM 1';BankLabel='P0 CHANNEL A';Capacity=8589934592;ConfiguredClockSpeed=3200;Speed=3200;SMBIOSMemoryType=26;FormFactor=8;Manufacturer='Unknown';PartNumber=''},
+ [pscustomobject]@{DeviceLocator='DIMM 1';BankLabel='P0 CHANNEL B';Capacity=8589934592;ConfiguredClockSpeed=3200;Speed=3200;SMBIOSMemoryType=26;FormFactor=8;Manufacturer='Kingston';PartNumber='KF432C16BB/8 '}))
+Assert-Equal 'slot A' 'DIMM 1 · канал A' $dimm[0].'Слот'
+Assert-Equal 'slot B' 'DIMM 1 · канал B' $dimm[1].'Слот'
+if($null -ne $dimm[0].'Производитель'){throw 'Placeholder "Unknown" must not be shown as a manufacturer'}
+Assert-Equal 'part number' 'KF432C16BB/8' $dimm[1].'Маркировка'
+$svc=@(Get-GSReadableServiceRows @([pscustomobject]@{name='wuauserv';status='Stopped'},[pscustomobject]@{name='AppXSvc';status='Running'}))
+Assert-Equal 'service stopped' 'не запущена (запускается по требованию)' $svc[0].'Центр обновления Windows'
+Assert-Equal 'service running' 'работает' $svc[0].'Развёртывание приложений (AppX)'
 # Full export: HTML and TXT readable, JSON raw.
 $details=[pscustomobject]@{operatingSystem=@();processors=@();motherboard=@();firmware=@();memoryModules=@([pscustomobject]@{DeviceLocator='DIMM 0';Capacity=8589934592;ConfiguredClockSpeed=2666;Speed=2666;SMBIOSMemoryType=26;FormFactor=12;Manufacturer='Samsung'});physicalDisks=@();volumes=@();graphics=@();monitors=@();network=@([pscustomobject]@{Name='WAN Miniport (IP)';Manufacturer='Microsoft';AdapterType='';NetConnectionStatus=$null;Speed=9223372036854775807;PhysicalAdapter=$false});audio=@();peripheral=@()}
-$profile=[pscustomobject]@{capturedUtc='2026-11-20T10:00:00Z';manufacturer='LENOVO';model='81W8';boardManufacturer='LENOVO';boardModel='LNVNB161216';processor='Intel Core i5-1035G1';memoryBytes=8589934592;summaryError='';edition='Windows 11 Pro';displayVersion='24H2';build='26100';installedDriverCount=120;problemDeviceCount=1;services=@();details=$details;summary=$null}
+$profile=[pscustomobject]@{capturedUtc='2026-11-20T10:00:00Z';services=@([pscustomobject]@{name='wuauserv';status='Stopped'});manufacturer='LENOVO';model='81W8';boardManufacturer='LENOVO';boardModel='LNVNB161216';processor='Intel Core i5-1035G1';memoryBytes=8589934592;summaryError='';edition='Windows 11 Pro';displayVersion='24H2';build='26100';installedDriverCount=120;problemDeviceCount=1;details=$details;summary=$null}
 $state=[pscustomobject]@{Profile=$profile}
 $tmp=Join-Path ([IO.Path]::GetTempPath()) ('gs-report-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp|Out-Null
@@ -63,7 +81,7 @@ try{
   $path=Join-Path $tmp ('r.'+$ext)
   Export-GSSystemProfile $state $path $false
   $text=[IO.File]::ReadAllText($path)
-  if($text -match '9223372036854775807|SMBIOSMemoryType|PhysicalAdapter'){throw ($ext+' report still shows raw WMI values')}
+  if($text -match '9223372036854775807|SMBIOSMemoryType|PhysicalAdapter|(?m)^status: |>status<'){throw ($ext+' report still shows raw WMI values')}
   if($text -notmatch 'DDR4' -or $text -notmatch 'SO-DIMM'){throw ($ext+' report misses readable memory type')}
   if($ext -eq 'txt' -and $text -notmatch '(?m)^Сборка: \d+'){throw 'TXT report must show the Windows build in Russian'}
  }
@@ -71,4 +89,4 @@ try{
  Export-GSSystemProfile $state $json $false
  if([IO.File]::ReadAllText($json) -notmatch '"SMBIOSMemoryType":\s*26'){throw 'JSON export must keep raw WMI values'}
 }finally{Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue}
-Write-Host 'Report readability gate passed: memory, disks, volumes, CPU, OS, network (virtual hidden, implausible speed suppressed), HTML/TXT readable, JSON raw.'
+Write-Host 'Report readability gate passed: video memory (no 32-bit cap), memory slots/channels, services, memory, disks, volumes, CPU, OS, network (virtual hidden, implausible speed suppressed), HTML/TXT readable, JSON raw.'

@@ -68,6 +68,102 @@ function Test-GSIntegratedGpu([string]$Name){
  return $false
 }
 
+# ---------------------------------------------------------------- GPU memory
+# Win32_VideoController.AdapterRAM is a uint32: every card with 4 GB or more reports
+# 4293918720 (0xFFF00000) or wraps around. It is never used as the answer for such cards.
+$script:GSAdapterRamCap=[double]4293918720
+$script:GSSmiCache=$null
+function Read-GSRegistryValue([string]$SubKey,[string]$Name){
+ # .NET access per key: one unreadable sibling (Class\{guid}\Properties is SYSTEM-only)
+ # must not abort the whole lookup the way Get-ChildItem -ErrorAction Stop did.
+ $key=$null
+ try{$key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($SubKey,$false);if($null -eq $key){return $null};return $key.GetValue($Name,$null)}catch{return $null}finally{if($key){$key.Dispose()}}
+}
+function Get-GSRegistrySubKeyNames([string]$SubKey){
+ $key=$null
+ try{$key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($SubKey,$false);if($null -eq $key){return @()};return @($key.GetSubKeyNames())}catch{return @()}finally{if($key){$key.Dispose()}}
+}
+function ConvertTo-GSRegistryBytes($Value){
+ if($null -eq $Value){return [double]0}
+ if($Value -is [byte[]]){
+  if($Value.Length -ge 8){return [double][BitConverter]::ToUInt64($Value,0)}
+  if($Value.Length -ge 4){return [double][BitConverter]::ToUInt32($Value,0)}
+  return [double]0
+ }
+ $n=[double]0;if([double]::TryParse([string]$Value,[ref]$n)){if($n -lt 0){$n+=4294967296};return $n};return [double]0
+}
+function Read-GSGpuDriverKeyMemory([string]$DriverKey){
+ $path='SYSTEM\CurrentControlSet\Control\Class\'+$DriverKey
+ $q=ConvertTo-GSRegistryBytes (Read-GSRegistryValue $path 'HardwareInformation.qwMemorySize')
+ if($q -gt 0){return [pscustomobject]@{Bytes=$q;Source='registry-qw'}}
+ $d=ConvertTo-GSRegistryBytes (Read-GSRegistryValue $path 'HardwareInformation.MemorySize')
+ if($d -gt 0){return [pscustomobject]@{Bytes=$d;Source='registry-dword'}}
+ return $null
+}
+function Invoke-GSNvidiaSmi{
+ # Returns @{name=MiB}; empty when the tool is absent or hangs (5 s limit).
+ $result=@{}
+ $candidates=@()
+ if($env:WINDIR){$candidates+=Join-Path $env:WINDIR 'System32\nvidia-smi.exe'}
+ if($env:ProgramFiles){$candidates+=Join-Path $env:ProgramFiles 'NVIDIA Corporation\NVSMI\nvidia-smi.exe'}
+ $exe=@($candidates|Where-Object{Test-Path -LiteralPath $_})|Select-Object -First 1
+ if(-not $exe){return $result}
+ try{
+  $psi=New-Object Diagnostics.ProcessStartInfo $exe,'--query-gpu=name,memory.total --format=csv,noheader,nounits'
+  $psi.UseShellExecute=$false;$psi.RedirectStandardOutput=$true;$psi.CreateNoWindow=$true
+  $p=[Diagnostics.Process]::Start($psi)
+  $out=$p.StandardOutput.ReadToEndAsync()
+  if(-not $p.WaitForExit(5000)){try{$p.Kill()}catch{};return $result}
+  foreach($line in ($out.Result -split "`r?`n")){
+   $parts=$line -split ','
+   $mib=[double]0
+   if($parts.Count -ge 2 -and [double]::TryParse($parts[1].Trim(),[ref]$mib) -and $mib -gt 0){$result[$parts[0].Trim()]=$mib}
+  }
+ }catch{}
+ return $result
+}
+function Get-GSGpuMemoryInfo{
+ # Order: exact driver key of this adapter -> class key with the same DriverDesc ->
+ # nvidia-smi -> AdapterRAM only when it is below the 32-bit cap.
+ param([string]$Name,[string]$PnpDeviceId,$AdapterRam,[hashtable]$ClassMemory=@{},[hashtable]$SmiMemory=$null)
+ if($PnpDeviceId){
+  $driverKey=[string](Read-GSRegistryValue ('SYSTEM\CurrentControlSet\Enum\'+$PnpDeviceId) 'Driver')
+  if($driverKey){$m=Read-GSGpuDriverKeyMemory $driverKey;if($m -and ($m.Source -eq 'registry-qw' -or $m.Bytes -lt $script:GSAdapterRamCap)){return [pscustomobject]@{Bytes=$m.Bytes;Source=$m.Source;AtLeast=$false}}}
+ }
+ if($Name -and $ClassMemory.ContainsKey($Name)){
+  $m=$ClassMemory[$Name]
+  if($m.Source -eq 'registry-qw' -or $m.Bytes -lt $script:GSAdapterRamCap){return [pscustomobject]@{Bytes=$m.Bytes;Source=$m.Source;AtLeast=$false}}
+ }
+ if($Name -match '(?i)nvidia'){
+  # Started at most once per collection and only when the registry gave no answer.
+  if($null -eq $SmiMemory){if($null -eq $script:GSSmiCache){$script:GSSmiCache=Invoke-GSNvidiaSmi};$SmiMemory=$script:GSSmiCache}
+  $key=@($SmiMemory.Keys|Where-Object{$Name -like ('*'+$_+'*') -or $_ -like ('*'+$Name+'*')})|Select-Object -First 1
+  if($key){return [pscustomobject]@{Bytes=[double]$SmiMemory[$key]*1MB;Source='nvidia-smi';AtLeast=$false}}
+ }
+ $raw=ConvertTo-GSRegistryBytes $AdapterRam
+ if($raw -ge $script:GSAdapterRamCap -or ($ClassMemory.ContainsKey($Name) -and $ClassMemory[$Name].Bytes -ge $script:GSAdapterRamCap)){return [pscustomobject]@{Bytes=[double]4GB;Source='wmi-capped';AtLeast=$true}}
+ if($raw -gt 0){return [pscustomobject]@{Bytes=$raw;Source='wmi';AtLeast=$false}}
+ return [pscustomobject]@{Bytes=[double]0;Source='none';AtLeast=$false}
+}
+function Get-GSGpuClassMemory{
+ $map=@{}
+ $class='SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+ foreach($sub in @(Get-GSRegistrySubKeyNames $class|Where-Object{$_ -match '^\d{4}$'})){
+  $desc=[string](Read-GSRegistryValue ($class+'\'+$sub) 'DriverDesc')
+  if(-not $desc){continue}
+  $m=Read-GSGpuDriverKeyMemory ('{4d36e968-e325-11ce-bfc1-08002be10318}\'+$sub)
+  if($m -and (-not $map.ContainsKey($desc) -or $m.Bytes -gt $map[$desc].Bytes)){$map[$desc]=$m}
+ }
+ return $map
+}
+function Format-GSVideoMemory($Info){
+ if($null -eq $Info -or [double]$Info.Bytes -le 0){return $null}
+ $gb=[double]$Info.Bytes/1GB
+ $text=if($gb -ge 1){[string][Math]::Round($gb)+' ГБ'}else{[string][Math]::Round([double]$Info.Bytes/1MB)+' МБ'}
+ if($Info.AtLeast){return ('не менее '+$text+' (точный объём Windows не сообщила)')}
+ return $text
+}
+
 function Format-GSGpuList([object[]]$Adapters){
  $items=New-Object System.Collections.Generic.List[object]
  foreach($adapter in @($Adapters)){
@@ -77,9 +173,11 @@ function Format-GSGpuList([object[]]$Adapters){
   $integrated=Test-GSIntegratedGpu $name
   $memory=[double]0;if($adapter.PSObject.Properties['MemoryBytes']){$memory=[double]$adapter.MemoryBytes}
   $label=$name
-  if(-not $integrated -and $memory -ge 512MB){
+  $atLeast=$false;if($adapter.PSObject.Properties['MemoryAtLeast']){$atLeast=[bool]$adapter.MemoryAtLeast}
+  if(-not $integrated -and $memory -ge 512MB -and $label -notmatch '(?i)\b\d+\s*GB\b'){
    $gb=[Math]::Round($memory/1GB)
-   if($gb -ge 1 -and $label -notmatch '(?i)\b\d+\s*GB\b'){$label=$label+' '+$gb+'GB'}
+   # A capped WMI value is a lower bound, never a size: "4GB" on an 8 GB card was a field report.
+   if($atLeast){$label=$label+' (видеопамять не менее '+$gb+'GB)'}elseif($gb -ge 1){$label=$label+' '+$gb+'GB'}
   }
   if($integrated){$label=$label+' (встроенная)'}
   $items.Add([pscustomobject]@{Label=$label;Integrated=$integrated})
@@ -183,6 +281,30 @@ function ConvertFrom-GSEdid([byte[]]$Edid){
   $value=($raw -split "`n")[0].Trim()
   if($tag -eq 0xFC -and $value){$name=$value}
   elseif($tag -eq 0xFE -and $value -and -not $text){$text=$value}
+ }
+ # The first descriptor is only the *preferred* timing: high-refresh monitors (144/165/240 Hz)
+ # usually put 60 Hz there and list the fast modes in later descriptors or in CTA-861
+ # extension blocks. The panel's maximum at its native resolution is what the client buys.
+ if($width -gt 0){
+  $starts=New-Object System.Collections.Generic.List[int]
+  for($offset=54;$offset -le 108;$offset+=18){$starts.Add($offset)}
+  for($block=128;$block+127 -lt $Edid.Length;$block+=128){
+   if([int]$Edid[$block] -ne 2){continue}
+   $dtd=[int]$Edid[$block+2]
+   if($dtd -lt 4){continue}
+   for($offset=$block+$dtd;$offset+17 -lt $block+127;$offset+=18){$starts.Add($offset)}
+  }
+  foreach($offset in $starts){
+   $c=([int]$Edid[$offset+1] -shl 8) -bor [int]$Edid[$offset]
+   if($c -le 0){continue}
+   $w=[int]$Edid[$offset+2] -bor (([int]$Edid[$offset+4] -shr 4) -shl 8)
+   $h=[int]$Edid[$offset+5] -bor (([int]$Edid[$offset+7] -shr 4) -shl 8)
+   if($w -ne $width -or $h -ne $height){continue}
+   $hb=[int]$Edid[$offset+3] -bor (([int]$Edid[$offset+4] -band 15) -shl 8)
+   $vb=[int]$Edid[$offset+6] -bor (([int]$Edid[$offset+7] -band 15) -shl 8)
+   $t=($w+$hb)*($h+$vb)
+   if($t -gt 0){$r=[Math]::Round(($c*10000.0)/$t);if($r -gt $refresh -and $r -le 600){$refresh=$r}}
+  }
  }
  $diagonal=if($widthCm -gt 0 -and $heightCm -gt 0){[Math]::Round([Math]::Sqrt($widthCm*$widthCm+$heightCm*$heightCm)/2.54,1)}else{0}
  return [pscustomobject]@{Vendor=$vendor;ProductCode=$product;Name=$name;PanelText=$text;Width=$width;Height=$height;Refresh=$refresh;DiagonalInches=$diagonal}
@@ -417,26 +539,17 @@ function Get-GSSummaryRaw {
  if(-not $cpuName -and $cpu){$cpuName=[string]$cpu.Name}
 
  $gpus=New-Object System.Collections.Generic.List[object]
- $classKey='HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
- $registryMemory=@{}
- try{
-  foreach($key in @(Get-ChildItem -LiteralPath $classKey -ErrorAction Stop|Where-Object{$_.PSChildName -match '^\d{4}$'})){
-   $props=Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
-   if(-not $props){continue}
-   $desc=[string]$props.DriverDesc
-   $bytes=[double]0
-   if($props.PSObject.Properties['HardwareInformation.qwMemorySize']){$bytes=[double]$props.'HardwareInformation.qwMemorySize'}
-   elseif($props.PSObject.Properties['HardwareInformation.MemorySize']){$raw=$props.'HardwareInformation.MemorySize';if($raw -is [byte[]]){$bytes=[double][BitConverter]::ToUInt32($raw,0)}else{$bytes=[double]$raw}}
-   if($desc -and $bytes -gt $registryMemory[$desc]){$registryMemory[$desc]=$bytes}
-  }
- }catch{}
+ $classMemory=Get-GSGpuClassMemory
+ $activeModes=New-Object System.Collections.Generic.List[object]
  foreach($adapter in @(Get-GSCimSafe Win32_VideoController)){
   if($null -eq $adapter){continue}
   $name=[string]$adapter.Name
-  $memory=if($registryMemory.ContainsKey($name)){$registryMemory[$name]}else{try{[double]$adapter.AdapterRAM}catch{0}}
-  $gpus.Add([pscustomobject]@{Name=$name;MemoryBytes=$memory})
+  if($adapter.PSObject.Properties['CurrentRefreshRate'] -and $adapter.PSObject.Properties['CurrentHorizontalResolution'] -and $adapter.PSObject.Properties['CurrentVerticalResolution'] -and [int]$adapter.CurrentRefreshRate -gt 1){$activeModes.Add([pscustomobject]@{Width=[int]$adapter.CurrentHorizontalResolution;Height=[int]$adapter.CurrentVerticalResolution;Refresh=[int]$adapter.CurrentRefreshRate})}
+  $pnp='';if($adapter.PSObject.Properties['PNPDeviceID']){$pnp=[string]$adapter.PNPDeviceID}
+  $ram=$null;if($adapter.PSObject.Properties['AdapterRAM']){$ram=$adapter.AdapterRAM}
+  $info=Get-GSGpuMemoryInfo -Name $name -PnpDeviceId $pnp -AdapterRam $ram -ClassMemory $classMemory
+  $gpus.Add([pscustomobject]@{Name=$name;MemoryBytes=$info.Bytes;MemoryAtLeast=$info.AtLeast;MemorySource=$info.Source})
  }
-
  $memoryModules=@(Get-GSCimSafe Win32_PhysicalMemory|ForEach-Object{[pscustomobject]@{Capacity=[double]$_.Capacity;SMBIOSMemoryType=[int]$_.SMBIOSMemoryType;ConfiguredClockSpeed=[int]$_.ConfiguredClockSpeed;Speed=[int]$_.Speed;Manufacturer=[string]$_.Manufacturer;PartNumber=[string]$_.PartNumber}})
 
  $systemDiskNumber=-1
@@ -464,6 +577,10 @@ function Get-GSSummaryRaw {
    $parsed=[pscustomobject]@{Vendor=(-join ($monitor.ManufacturerName|Where-Object{$_}|ForEach-Object{[char]$_}));ProductCode=(-join ($monitor.ProductCodeID|Where-Object{$_}|ForEach-Object{[char]$_}));Name=(-join ($monitor.UserFriendlyName|Where-Object{$_}|ForEach-Object{[char]$_}));PanelText='';Width=0;Height=0;Refresh=0;DiagonalInches=0}
   }
   $parsed|Add-Member -NotePropertyName Internal -NotePropertyValue $internal -Force
+  # Windows runs the panel at a rate it accepted: that rate at the native resolution is proven.
+  foreach($mode in $activeModes){
+   if([int]$mode.Width -eq [int]$parsed.Width -and [int]$mode.Height -eq [int]$parsed.Height -and [int]$mode.Refresh -gt [int]$parsed.Refresh -and [int]$mode.Refresh -le 600){$parsed.Refresh=[int]$mode.Refresh}
+  }
   $panels.Add($parsed)
   }catch{}
  }
