@@ -254,7 +254,7 @@ function Apply-GSDriverSnapshot($Snapshot){
   $libraryRows=@($devices|Where-Object{[string](Get-GSDriverProperty $_ 'kind' '') -eq 'Library'})
   $inventoryCount=@($devices|Where-Object{[string](Get-GSDriverProperty $_ 'kind' '') -eq 'Inventory'}).Count
   $eligibleCount=@($devices|Where-Object{[string](Get-GSDriverProperty $_ 'kind' '') -in @('Missing','Issue','GPU','Update','Library') -and [bool](Get-GSDriverProperty $_ 'canSelect' $false)}).Count
-  $script:driverDeviceCount.Text=('Требуют внимания: '+($problemRows.Count+$updateRows.Count)+'  •  установленные драйверы: '+$inventoryCount+'  •  компоненты: '+$libraryRows.Count)
+  $script:driverDeviceCount.Text=('Нужно установить: '+$problemRows.Count+'  •  обновления Windows Update: '+$updateRows.Count+'  •  установленные драйверы: '+$inventoryCount+'  •  компоненты: '+$libraryRows.Count)
   $script:driverViewAll.IsEnabled=($inventoryCount -gt 0)
   $script:driverViewComponents.IsEnabled=($libraryRows.Count -gt 0)
   if(($problemRows.Count+$updateRows.Count) -eq 0 -and -not $busy){$script:driverHint.Text='Все обнаруженные устройства работают исправно. Подтверждённых обновлений нет.'}
@@ -274,8 +274,8 @@ function Apply-GSDriverSnapshot($Snapshot){
   $kind=[string](Get-GSDriverProperty $device 'kind' '')
   $kindText=switch($kind){'Update'{'Обновление Windows Update'}'Library'{[string](Get-GSDriverProperty $device 'libraryStatus' 'Компонент Windows')}'Inventory'{'Актуальность не проверена'}'GPU'{'Базовый видеодрайвер'}'Issue'{'Ошибка устройства, код '+[string](Get-GSDriverProperty $device 'code' '?')}default{'Драйвер не установлен'}}
   if($null -eq $device.PSObject.Properties['KindText']){$device|Add-Member -NotePropertyName KindText -NotePropertyValue $kindText}else{$device.KindText=$kindText}
-  $category=if($kind -eq 'Inventory'){'Установленные драйверы'}elseif($kind -eq 'Library'){'Системные компоненты'}else{'Требуют внимания'}
-  $order=if($kind -eq 'Inventory'){1}elseif($kind -eq 'Library'){2}else{0}
+  $category=if($kind -eq 'Inventory'){'Установленные драйверы'}elseif($kind -eq 'Library'){'Системные компоненты'}elseif($kind -eq 'Update'){'Обновления Windows Update'}else{'Драйверы для установки'}
+  $order=if($kind -in @('Missing','Issue','GPU')){0}elseif($kind -eq 'Update'){1}elseif($kind -eq 'Inventory'){2}else{3}
   if($null -eq $device.PSObject.Properties['DisplayCategory']){$device|Add-Member -NotePropertyName DisplayCategory -NotePropertyValue $category}else{$device.DisplayCategory=$category}
   if($null -eq $device.PSObject.Properties['DisplayOrder']){$device|Add-Member -NotePropertyName DisplayOrder -NotePropertyValue $order}else{$device.DisplayOrder=$order}
   if($kind -eq 'Inventory'){$device.Selected=$false;if($null -eq $device.PSObject.Properties['canSelect']){$device|Add-Member -NotePropertyName canSelect -NotePropertyValue $false}else{$device.canSelect=$false}}
@@ -372,16 +372,16 @@ function Test-GSDriverSpeakers {
   $endpoints=@()
   try{$endpoints=@(Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction Stop|Where-Object{[string]$_.InstanceId -like 'SWD\MMDEVAPI\{0.0.0.*'}|ForEach-Object{[pscustomobject]@{Status=[string]$_.Status;Name=[string]$_.FriendlyName}})}catch{$endpoints=@()}
   $verdict=Get-GSSoundTestVerdict $endpoints ''
-  if(-not $verdict.Play){$script:driverHint.Text=$verdict.Text;Write-GSDriverUiLog 'sound-test' $verdict.State;return}
+  if(-not $verdict.Play){$script:driverHint.Text=$verdict.Text;Write-GSDriverUiLog 'sound-test' $verdict.State;[void][Windows.MessageBox]::Show($verdict.Text,'Проверка звука',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Warning);return}
   $wav=@('Windows Notify System Generic.wav','Windows Background.wav','chimes.wav','tada.wav')|ForEach-Object{Join-Path $env:WINDIR ('Media\'+$_)}|Where-Object{Test-Path -LiteralPath $_}|Select-Object -First 1
-  if(-not $wav){$script:driverHint.Text='Не найден системный звук для теста (папка Windows\Media пуста).';Write-GSDriverUiLog 'sound-test' 'NoSample';return}
+  if(-not $wav){$script:driverHint.Text='Не найден системный звук для теста (папка Windows\Media пуста).';Write-GSDriverUiLog 'sound-test' 'NoSample';[void][Windows.MessageBox]::Show($script:driverHint.Text,'Проверка звука',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Warning);return}
   $player=New-Object System.Media.SoundPlayer $wav
   try{$player.PlaySync();Start-Sleep -Milliseconds 250;$player.PlaySync()}finally{$player.Dispose()}
   $answer=[Windows.MessageBox]::Show('Вы услышали тестовый сигнал из динамиков (или наушников)?','Проверка звука',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question)
   $final=Get-GSSoundTestVerdict $endpoints ([string]$answer)
   $script:driverHint.Text=$final.Text
   Write-GSDriverUiLog 'sound-test' ($final.State+' endpoints='+@($endpoints|Where-Object{$_.Status -eq 'OK'}).Count)
- }catch{$script:driverHint.Text='Проверка звука не выполнена: '+$_.Exception.Message}
+ }catch{$script:driverHint.Text='Проверка звука не выполнена: '+$_.Exception.Message;Write-GSDriverUiLog 'sound-test' ('Error '+$_.Exception.Message);[void][Windows.MessageBox]::Show($script:driverHint.Text,'Проверка звука',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Error)}
 }
 
 function Save-GSDriverDiagnostics {

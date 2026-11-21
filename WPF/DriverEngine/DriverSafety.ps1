@@ -353,3 +353,23 @@ function Format-GSOutcomeSummary{
   if($VendorUrl -and ($counts['SourceUnavailable'] -or $counts['NetworkError'] -or $counts['NotFound'])){$parts+=('официальный сайт производителя: '+$VendorUrl)}
   return ($parts -join '; ')
 }
+
+function ConvertTo-GSStableArray($Collection){
+  # Windows PowerShell 5.1 can throw "Argument types do not match" when a
+  # generic List[object] is enumerated through @(...). Materialize it through
+  # ToArray() before it crosses a pipeline/foreach boundary.
+  if($null -eq $Collection){return @()}
+  $method=$Collection.PSObject.Methods['ToArray']
+  if($null -ne $method){return @($Collection.ToArray())}
+  return @($Collection)
+}
+
+function Get-GSUnresolvedTargets($Targets,[string[]]$SelectedInstanceIds){
+  # An empty selection is valid after a successful install. Do not access a
+  # property on an empty array under StrictMode.
+  if($null -eq $SelectedInstanceIds -or $SelectedInstanceIds.Count -eq 0){return @()}
+  return @($Targets|Where-Object{
+    $p=if($null -ne $_){$_.PSObject.Properties['instanceId']}else{$null}
+    $p -and $SelectedInstanceIds -contains [string]$p.Value
+  })
+}

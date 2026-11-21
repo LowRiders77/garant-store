@@ -81,6 +81,27 @@ try{
  )|Sort-Object @{Expression={Get-GSPackagePriority $_}}
  if($ordered[0].label -ne 'chipset' -or $ordered[1].label -ne 'serial' -or $ordered[2].label -ne 'sound'){throw 'Parent-driver dependency order is incorrect'}
 
+ # Regression for the exact field crash seen after the first successful
+ # PnPUtil call on Windows PowerShell 5.1 (List[object] through @(...)).
+ $generic=New-Object System.Collections.Generic.List[object]
+ $generic.Add([pscustomobject]@{instanceId='A'});$generic.Add([pscustomobject]@{instanceId='B'})
+ $stable=@(ConvertTo-GSStableArray $generic)
+ if($stable.Count -ne 2 -or $stable[1].instanceId -ne 'B'){throw 'Generic install-plan list cannot be enumerated safely'}
+ if(@(Get-GSUnresolvedTargets @($stable) @()).Count -ne 0){throw 'Empty selection must produce an empty unresolved target list'}
+ if(@(Get-GSUnresolvedTargets @($stable) @('B')).Count -ne 1){throw 'Selected unresolved target filtering is incorrect'}
+
+ $workerSource=Get-Content -LiteralPath (Join-Path $engine 'Worker.ps1') -Raw -Encoding UTF8
+ $runStart=$workerSource.IndexOf('function Run-Install')
+ $runEnd=$workerSource.IndexOf("`ntry {",$runStart)
+ $runSource=$workerSource.Substring($runStart,$runEnd-$runStart)
+ $downloadPos=$runSource.IndexOf('$prepared.Add(')
+ $unpackPos=$runSource.IndexOf("Write-Status 'Распаковка'")
+ $installPos=$runSource.IndexOf("Write-Status 'Установка'")
+ if($downloadPos -lt 0 -or $unpackPos -le $downloadPos -or $installPos -le $unpackPos){throw 'Batch flow is not download-all -> unpack-all -> install'}
+
+ $selectedSource=Get-Content -LiteralPath (Join-Path $engine 'Selected.ps1') -Raw -Encoding UTF8
+ if($selectedSource -notmatch "'Mode' 'fallback'"){throw 'Fresh Windows Update fallback is not invoked for unresolved DRP devices'}
+
  if((Get-GSWuaInstallOutcome 4 -2145124330) -ne 'PendingRebootOrBusy'){throw '0x80240016 was not classified'}
  if((Get-GSWuaErrorExplanation -2145124330) -notmatch 'перезагруз'){throw '0x80240016 explanation is not actionable'}
 
@@ -91,7 +112,7 @@ try{
  $blocked=$false;try{$null=Expand-GSSafeArchive -Archive $badZip -Destination (Join-Path $work 'expanded')}catch{$blocked=$true}
  if(-not $blocked -or (Test-Path -LiteralPath (Join-Path $work 'escape.txt'))){throw 'ZIP traversal was not blocked'}
 
- Write-Host 'Aquarius NS483 regression passed: 23 Code 28 devices, exact INF matches, FORCED metadata safety, cache isolation, dependency order, ZIP traversal and 0x80240016.'
+ Write-Host 'Aquarius NS483 regression passed: 23 Code 28 devices, exact INF matches, PS5 bulk plan, phased batch flow, fresh WU fallback, cache isolation, dependency order, ZIP traversal and 0x80240016.'
 }finally{
  $env:GARANT_PO_DATA_ROOT=$oldData
  Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

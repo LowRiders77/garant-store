@@ -46,8 +46,7 @@ try{
   elseif($item -match '^update:([0-9A-Fa-f-]{36}\|\d+)$'){$updates.Add($Matches[1])}
   elseif($item -match '^library:(vcredist-x64|vcredist-x86|directx-legacy|netfx3|webview2|dotnet-desktop|dotnet-desktop-10|windows-app-runtime|physx|physx-legacy|openal)$'){$libraries.Add($Matches[1])}
  }
- $updateRows=@($originalInventory|Where-Object{[string](Get-GSSelectedChildProperty $_ 'kind' '') -eq 'Update'})
- if($devices.Count -and $updateRows.Count){Write-SelectedLog 'Для отмеченных устройств сначала запускается поиск и установка из DRP. Предложения Windows Update остаются отдельным источником.'}
+ if($devices.Count){Write-SelectedLog 'Для отмеченных устройств выполняется пакетная цепочка DRP: загрузка всех архивов, распаковка всех архивов, установка. Windows Update используется только для оставшихся проблем.'}
  $script:SelectedTask.receivedIds=$selection
  $script:SelectedTask.total=$devices.Count+$updates.Count+$libraries.Count;$script:SelectedTask.remaining=$script:SelectedTask.total
  if($script:SelectedTask.total -eq 0){throw 'Не выбраны поддерживаемые элементы для операции.'}
@@ -57,11 +56,10 @@ try{
   # use matching Windows Update offers as a best-effort fallback.
   if(-not $updates.Count -and -not (Test-Path -LiteralPath (Join-Path $script:StateDir 'cancel.flag'))){
    $afterDrp=@(Get-RemainingSelectedProblemDevices (Load-JsonFile $script:DeviceFile @()) $devices.ToArray())
-   $wuFallbackIds=@(Get-MatchedWindowsDriverUpdateIds $afterDrp $updateRows)
-   if($wuFallbackIds.Count){
-    Write-SelectedLog ('DRP оставил без установленного пакета устройств: '+$afterDrp.Count+'; применяю совпадающие предложения Windows Update как резервный источник.')
-    Invoke-SelectedChild 'Updates.ps1' 'Mode' 'install' $wuFallbackIds 'Резервные обновления Windows Update'
-   }elseif($afterDrp.Count){Write-SelectedLog ('Для оставшихся устройств в результатах сканирования нет совпадающего предложения Windows Update: '+$afterDrp.Count)}
+   if($afterDrp.Count){
+    Write-SelectedLog ('DRP оставил проблемных устройств: '+$afterDrp.Count+'; запускаю свежий поиск применимых драйверов Windows Update как резервный источник.')
+    Invoke-SelectedChild 'Updates.ps1' 'Mode' 'fallback' @($afterDrp|ForEach-Object{[string]$_.instanceId}) 'Резервный поиск Windows Update'
+   }
   }
  }
  elseif($Mode -eq 'download' -and $devices.Count){Invoke-SelectedChild 'Worker.ps1' 'Action' 'download' @($devices.ToArray()) 'Пакеты драйверов'}

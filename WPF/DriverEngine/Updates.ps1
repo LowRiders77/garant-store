@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([ValidateSet('scan','install','download')][string]$Mode='scan')
+param([ValidateSet('scan','install','download','fallback')][string]$Mode='scan')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Core.ps1')
 . (Join-Path $PSScriptRoot 'UpdateCatalog.ps1')
@@ -30,7 +30,7 @@ try{
  }else{
   $selection=@(Load-JsonFile (Join-Path $script:StateDir 'selection.json') @()|ForEach-Object{[string]$_})
   if($selection.Count -eq 0){throw 'Не выбраны обновления для установки'}
-  if($Mode -eq 'install'){
+  if($Mode -in @('install','fallback')){
    $pending=@(Get-GSPendingRebootReasons)
    if($pending.Count){
     $script:UpdateTask.needReboot=$true
@@ -40,6 +40,20 @@ try{
   Test-UpdateCancelled
   $session=New-Object -ComObject Microsoft.Update.Session;$session.ClientApplicationID='Garant Store'
   $searcher=$session.CreateUpdateSearcher();$available=(Invoke-GSWuaDriverSearch $searcher).Updates
+  if($Mode -eq 'fallback'){
+   $remainingDevices=@(Load-JsonFile $script:DeviceFile @()|Where-Object{
+    $p=if($null -ne $_){$_.PSObject.Properties['instanceId']}else{$null}
+    $p -and $selection -contains [string]$p.Value
+   })
+   $availableRows=@(for($i=0;$i -lt $available.Count;$i++){ConvertTo-GSWuaDriverRow $available.Item($i)})
+   $selection=@(Get-MatchedWindowsDriverUpdateIds $remainingDevices $availableRows)
+   Update-Log ('Свежий резервный поиск: проблемных устройств '+$remainingDevices.Count+'; совпадающих предложений Windows Update '+$selection.Count)
+   if($selection.Count -eq 0){
+    $script:UpdateTask.scanned=$true;$script:UpdateTask.percent=100
+    Update-Status 'Готово' 'Для оставшихся устройств Windows Update не предложил применимых драйверов.'
+    return
+   }
+  }
   $collection=New-Object -ComObject Microsoft.Update.UpdateColl
   $chosen=New-Object System.Collections.ArrayList
   for($i=0;$i -lt $available.Count;$i++){
