@@ -30,6 +30,13 @@ try{
  }else{
   $selection=@(Load-JsonFile (Join-Path $script:StateDir 'selection.json') @()|ForEach-Object{[string]$_})
   if($selection.Count -eq 0){throw 'Не выбраны обновления для установки'}
+  if($Mode -eq 'install'){
+   $pending=@(Get-GSPendingRebootReasons)
+   if($pending.Count){
+    $script:UpdateTask.needReboot=$true
+    throw ('Перед установкой драйверов Windows Update требуется перезагрузка. Признаки: '+($pending -join ', ')+'. Garant-ПО не сбрасывает компоненты Windows Update и не повторяет установку бесконечно.')
+   }
+  }
   Test-UpdateCancelled
   $session=New-Object -ComObject Microsoft.Update.Session;$session.ClientApplicationID='Garant Store'
   $searcher=$session.CreateUpdateSearcher();$available=(Invoke-GSWuaDriverSearch $searcher).Updates
@@ -47,7 +54,12 @@ try{
   $script:UpdateTask.total=$collection.Count;$script:UpdateTask.remaining=$collection.Count
   Update-Status 'Скачивание обновлений' ('Загружаем выбранные обновления: '+$collection.Count)
   Update-Log ('Выбрано обновлений: '+$collection.Count)
-  $downloader=$session.CreateUpdateDownloader();$downloader.Updates=$collection;$downloadResult=$downloader.Download()
+  $downloader=$session.CreateUpdateDownloader();$downloader.Updates=$collection
+  try{$downloadResult=$downloader.Download()}catch{
+   $hr=[int]$_.Exception.HResult
+   if($hr -eq -2145124330){$script:UpdateTask.needReboot=$true;throw (Get-GSWuaErrorExplanation $hr)}
+   throw
+  }
   if([int]$downloadResult.ResultCode -notin @(2,3)){throw ('Windows Update не смог скачать выбранные драйверы. Код результата: '+[int]$downloadResult.ResultCode)}
   if($Mode -eq 'download'){
    $exported=0;$exportFailures=New-Object System.Collections.Generic.List[string]
@@ -86,7 +98,12 @@ try{
   }
   if($installCollection.Count -eq 0){throw 'Windows Update не завершил скачивание ни одного выбранного драйвера'}
   Update-Status 'Установка обновлений' ('Устанавливаем драйверы: '+$installCollection.Count)
-  $installer=$session.CreateUpdateInstaller();$installer.Updates=$installCollection;$installResult=$installer.Install()
+  $installer=$session.CreateUpdateInstaller();$installer.Updates=$installCollection
+  try{$installResult=$installer.Install()}catch{
+   $hr=[int]$_.Exception.HResult
+   if($hr -eq -2145124330){$script:UpdateTask.needReboot=$true;throw (Get-GSWuaErrorExplanation $hr)}
+   throw
+  }
   $script:UpdateTask.needReboot=[bool]$installResult.RebootRequired
   if($script:UpdateTask.needReboot){Update-Log 'Для завершения установки требуется перезагрузка.'}
   # Judge each update on its own: the batch result code is "failed" as soon as
@@ -99,6 +116,7 @@ try{
    switch(Get-GSWuaInstallOutcome ([int]$one.ResultCode) $hresult){
     'Installed'{$installedCount++;Update-Log ('Установлено: '+$title)}
     'NotNeeded'{$notNeededCount++;Update-Log ('Не требуется: уже установлен такой же или более подходящий драйвер — '+$title)}
+    'PendingRebootOrBusy'{$script:UpdateTask.errors++;$script:UpdateTask.needReboot=$true;$failures.Add($title+' (0x80240016: другая установка или обязательная перезагрузка)');Update-Log ((Get-GSWuaErrorExplanation $hresult)+' Обновление: '+$title)}
     default{$script:UpdateTask.errors++;$failures.Add($title+' ('+(Format-GSHResult $hresult)+')');Update-Log ('Ошибка обновления '+$title+'; код результата '+[int]$one.ResultCode+'; '+(Format-GSHResult $hresult))}
    }
   }

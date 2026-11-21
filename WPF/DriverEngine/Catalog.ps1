@@ -67,6 +67,19 @@ function Get-DynamicDrpLinks($dev) {
   if($dev.instanceId -and -not $script:GSDeviceOutcome.ContainsKey([string]$dev.instanceId)){$script:GSDeviceOutcome[[string]$dev.instanceId]='NotFound'}
   return @()
 }
+function Get-GSPackagePriority($Package){
+  # Parent buses before their children. All packages are still installed one
+  # by one and re-scanned between steps.
+  if([string]$Package.kind -in @('NvidiaGPU','AmdGPU','IntelGPU')){return 0}
+  $u=[string]$Package.url
+  if($u -match '(?i)/FORCED/(Chipset|HECI)/'){return 10}
+  if($u -match '(?i)/FORCED/(SerialIO|DPTF|HID)/'){return 20}
+  if($u -match '(?i)/FORCED/(Thunderbolt|USB)/'){return 30}
+  if($u -match '(?i)/(Bluetooth|Network)[^/]*/.*?/FORCED/'){return 40}
+  if($u -match '(?i)/(Sound[^/]*)/.*?/FORCED/(SST|HDA)/'){return 50}
+  return 60
+}
+
 function Get-Packages($devices,[switch]$KnownOnly) {
   $catalog = @()
   $db=Join-Path $script:Root 'DRP_Known_Links.csv'
@@ -126,7 +139,7 @@ function Get-Packages($devices,[switch]$KnownOnly) {
     }
     if ($urls.Count -eq 0) {Log "DRP не предложил прямой ZIP для $($d.hwid)."}
   }
-  return @($res.ToArray())
+  return @($res.ToArray()|Sort-Object @{Expression={Get-GSPackagePriority $_}},@{Expression={[string]$_.label}})
 }
 function Get-PackageTargets($Package,$Devices,[string[]]$AllowedInstanceIds=@()) {
   $matched=New-Object System.Collections.Generic.List[object]
