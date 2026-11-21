@@ -220,7 +220,7 @@ function Test-GSInfPackageTrust{
   # valid Windows Authenticode chain. PnPUtil performs its own kernel-policy
   # verification too; this is an early, explainable rejection.
   param([Parameter(Mandatory=$true)]$Model,[scriptblock]$SignatureResolver=$null)
-  $catalogs=if($Model.PSObject.Properties['Catalogs']){@($Model.Catalogs|Where-Object{$_})}else{@()}
+  $catalogs=@(if($Model.PSObject.Properties['Catalogs']){$Model.Catalogs|Where-Object{$_}})
   if(-not $catalogs.Count){return [pscustomobject]@{Trusted=$false;Catalog='';Signer='';Reason='В INF не указан файл каталога цифровой подписи'}}
   foreach($name in $catalogs){
     $catalogPath=Join-Path (Split-Path -Parent ([string]$Model.Path)) ([IO.Path]::GetFileName([string]$name))
