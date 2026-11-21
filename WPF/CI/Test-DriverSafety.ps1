@@ -35,8 +35,8 @@ try{
  $dsp=[pscustomobject]@{name='Intel High Definition DSP';instanceId='INTELAUDIO\DSP_CTLR_DEV_34C8&VEN_8086&DEV_0222&SUBSYS_384017AA&REV_0030\4&22FEE311&0&0800';category='';hardwareIds=@('INTELAUDIO\DSP_CTLR_DEV_34C8&VEN_8086&DEV_0222&SUBSYS_384017AA&REV_0030','INTELAUDIO\DSP_CTLR_DEV_34C8&VEN_8086&DEV_0222&SUBSYS_384017AA','INTELAUDIO\DSP_CTLR_DEV_34C8&VEN_8086&DEV_0222')}
  $rtk=[pscustomobject]@{name='Realtek Audio';instanceId='INTELAUDIO\FUNC_01&VEN_10EC&DEV_0230&SUBSYS_17AA3848&REV_1000\5&1';category='MEDIA';hardwareIds=@('INTELAUDIO\FUNC_01&VEN_10EC&DEV_0230&SUBSYS_17AA3848&REV_1000','INTELAUDIO\FUNC_01&VEN_10EC&DEV_0230&SUBSYS_17AA3848','INTELAUDIO\FUNC_01&VEN_10EC&DEV_0230')}
  $d=Select-GSInfForDevice -Device $dsp -Models $models
- Assert-Equal 'DSP gets the Intel SST INF' $sst $d.Model.Path
- Assert-Equal 'DSP match is generic Intel' 3 $d.Tier
+ Assert-Equal 'DSP gets the newer exact Intel INF' $forced $d.Model.Path
+ Assert-Equal 'DSP match keeps the OEM subsystem rank' 1 $d.Tier
  $r=Select-GSInfForDevice -Device $rtk -Models $models
  Assert-Equal 'codec gets the Realtek INF' $codec $r.Model.Path
  Assert-Equal 'codec match is OEM subsystem' 1 $r.Tier
