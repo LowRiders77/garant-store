@@ -387,7 +387,7 @@ function Run-Install($packages,$install,$original) {
     if($pkg.kind -ne 'Zip'){continue}
     $expandIndex++
     $folder=Join-Path $script:CacheDir $item.UrlKey
-    Write-Status 'Распаковка' ("Архив $expandIndex: "+$item.FileName)
+    Write-Status 'Распаковка' ("Архив ${expandIndex}: "+$item.FileName)
     Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
     try{
       $expanded=Expand-GSSafeArchive -Archive $item.Path -Destination $folder
