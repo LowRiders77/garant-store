@@ -58,6 +58,19 @@ function Get-GSPendingRebootReasons{
  return @($reasons.ToArray())
 }
 
+function Get-GSWuaInstallPreflight($PendingReasons,[int]$SelectionCount){
+ $pending=@($PendingReasons|Where-Object{$_})
+ if($pending.Count -eq 0){return [pscustomobject]@{CanInstall=$true;NeedReboot=$false;Deferred=0;Phase='Готово';Message=''}}
+ $message='Перед установкой драйверов Windows Update требуется перезагрузка. Признаки: '+($pending -join ', ')+'. После перезагрузки снова выполните сканирование и установку. Garant-ПО не сбрасывает компоненты Windows Update и не повторяет установку бесконечно.'
+ return [pscustomobject]@{CanInstall=$false;NeedReboot=$true;Deferred=$SelectionCount;Phase='Ожидается перезагрузка';Message=$message}
+}
+
+function Get-GSRemainingDriverOutcome([int]$RemainingCount,[bool]$NeedReboot){
+ if($RemainingCount -le 0){return 'InstalledVerified'}
+ if($NeedReboot){return 'PendingReboot'}
+ return 'Failed'
+}
+
 function Get-MatchedWindowsDriverUpdateIds($Devices,$Updates) {
  $matched=New-Object System.Collections.Generic.List[string]
  foreach($device in @($Devices)){

@@ -31,13 +31,12 @@ try{
   $selection=@(Load-JsonFile (Join-Path $script:StateDir 'selection.json') @()|ForEach-Object{[string]$_})
   if($selection.Count -eq 0){throw 'Не выбраны обновления для установки'}
   if($Mode -in @('install','fallback')){
-   $pending=@(Get-GSPendingRebootReasons)
-   if($pending.Count){
-    $script:UpdateTask.needReboot=$true
-    $script:UpdateTask.deferred=$selection.Count
-    $message='Перед установкой драйверов Windows Update требуется перезагрузка. Признаки: '+($pending -join ', ')+'. После перезагрузки снова выполните сканирование и установку. Garant-ПО не сбрасывает компоненты Windows Update и не повторяет установку бесконечно.'
-    Update-Log $message
-    Update-Status 'Ожидается перезагрузка' $message
+   $preflight=Get-GSWuaInstallPreflight (Get-GSPendingRebootReasons) $selection.Count
+   if(-not $preflight.CanInstall){
+    $script:UpdateTask.needReboot=[bool]$preflight.NeedReboot
+    $script:UpdateTask.deferred=[int]$preflight.Deferred
+    Update-Log ([string]$preflight.Message)
+    Update-Status ([string]$preflight.Phase) ([string]$preflight.Message)
     return
    }
   }

@@ -13,6 +13,7 @@ $oldData=$env:GARANT_PO_DATA_ROOT;$env:GARANT_PO_DATA_ROOT=(Join-Path $work 'dat
 try{
  . (Join-Path $engine 'Core.ps1')
  . (Join-Path $engine 'Catalog.ps1')
+ . (Join-Path $engine 'UpdateCatalog.ps1')
 
  $targets=@(Get-GSDrpOsTargets -Caption 'Microsoft Windows 11 Pro' -Build 26100 -Is64Bit $true)
  if($targets.Count -ne 2 -or $targets[0] -ne 'windows-11-x64' -or $targets[1] -ne 'windows-10-x64'){
@@ -65,14 +66,11 @@ try{
  $links=@(Get-GSDrpLinksFromHtml $fixture)
  if($links.Count -ne 2 -or $links -notcontains $zip -or @($links|Where-Object{$_ -match 'evil\.invalid'}).Count){throw 'DriverPack HTML link extraction is incorrect'}
 
- $updatesSource=Get-Content -LiteralPath (Join-Path $engine 'Updates.ps1') -Raw -Encoding UTF8
- if($updatesSource -notmatch "Update-Status 'Ожидается перезагрузка'" -or $updatesSource -notmatch '\$script:UpdateTask\.deferred'){
-  throw 'Windows Update pending-reboot state is not separated from installation failures'
- }
- $selectedSource=Get-Content -LiteralPath (Join-Path $engine 'Selected.ps1') -Raw -Encoding UTF8
- if($selectedSource -notmatch 'remainingSelected\.Count -and \$script:SelectedTask\.needReboot'){
-  throw 'Selected-driver result would report a false failure while reboot verification is pending'
- }
+ $preflight=Get-GSWuaInstallPreflight @('PendingFileRenameOperations') 11
+ if($preflight.CanInstall -or -not $preflight.NeedReboot -or $preflight.Deferred -ne 11 -or $preflight.Phase -ne 'Ожидается перезагрузка'){throw 'Windows Update pending reboot was not deferred correctly'}
+ if((Get-GSWuaInstallPreflight @() 11).CanInstall -ne $true){throw 'Windows Update install was blocked without a reboot reason'}
+ if((Get-GSRemainingDriverOutcome 14 $true) -ne 'PendingReboot'){throw 'Remaining devices became a false failure while reboot verification is pending'}
+ if((Get-GSRemainingDriverOutcome 14 $false) -ne 'Failed'){throw 'A real unresolved device set was not reported as failed'}
 
  Write-Host 'ASUS FX505GE regression passed: 14 device IDs, compatible IDs, Windows 11 -> Windows 10 catalog fallback, INF applicability, safe ZIP URL parsing and pending-reboot result handling.'
 }finally{

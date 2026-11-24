@@ -84,8 +84,9 @@ try{
   }
   if($devices.Count){
    $remainingSelected=@(Get-RemainingSelectedProblemDevices (Load-JsonFile $script:DeviceFile @()) $devices.ToArray())
-   if($remainingSelected.Count -and $script:SelectedTask.needReboot){Write-SelectedLog ('После установки остаются устройства для повторной проверки: '+$remainingSelected.Count+'. Операция не считается ошибкой до обязательной перезагрузки и нового сканирования.')}
-   elseif($remainingSelected.Count){$script:SelectedTask.errors++;$script:SelectedTask.lastError=('После DRP и доступного резерва осталось устройств без подтверждённой установки: '+$remainingSelected.Count);Write-SelectedLog $script:SelectedTask.lastError}
+   $remainingOutcome=Get-GSRemainingDriverOutcome $remainingSelected.Count $script:SelectedTask.needReboot
+   if($remainingOutcome -eq 'PendingReboot'){Write-SelectedLog ('После установки остаются устройства для повторной проверки: '+$remainingSelected.Count+'. Операция не считается ошибкой до обязательной перезагрузки и нового сканирования.')}
+   elseif($remainingOutcome -eq 'Failed'){$script:SelectedTask.errors++;$script:SelectedTask.lastError=('После DRP и доступного резерва осталось устройств без подтверждённой установки: '+$remainingSelected.Count);Write-SelectedLog $script:SelectedTask.lastError}
   }
  }elseif($Mode -eq 'download'){
   Save-JsonFile $script:DeviceFile $originalInventory
