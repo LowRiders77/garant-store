@@ -271,7 +271,16 @@ function Get-SystemLibrarySuggestions {
 }
 function Get-NormalIds($dev) {
   $keys = New-Object System.Collections.Generic.List[string]
-  foreach ($id in @($dev.hardwareIds)) {
+  # Search sources with the same ranked identity set Windows PnP uses for INF
+  # selection. Some devices expose the useful generic match only through
+  # DEVPKEY_Device_CompatibleIds; ignoring it made valid chipset/audio packages
+  # invisible even though the later INF verifier would have accepted them.
+  $reportedIds=New-Object System.Collections.Generic.List[string]
+  foreach($propertyName in @('hardwareIds','compatibleIds')){
+    $property=$dev.PSObject.Properties[$propertyName]
+    if($null -ne $property){foreach($reportedId in @($property.Value)){if($reportedId){$reportedIds.Add([string]$reportedId)}}}
+  }
+  foreach ($id in @($reportedIds.ToArray())) {
     if (!$id) {continue}
     $id = ([string]$id).ToUpperInvariant()
     $keys.Add($id)

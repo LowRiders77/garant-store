@@ -7,22 +7,50 @@
   }
   return @($keys.ToArray())
 }
+function Get-GSDrpOsTargets {
+  # DriverPack separates Windows 10 and Windows 11 catalog pages even though a
+  # signed NTamd64.10.0 package can be valid on both systems. On Windows 11 we
+  # try the native catalog first and the Windows 10 catalog second. A result
+  # from the older catalog still has to pass archive, signature, INF target and
+  # exact PnP ID checks before installation.
+  param([string]$Caption='',[int]$Build=0,[object]$Is64Bit=$null)
+  if(-not $Caption -or $Build -le 0){
+    try{
+      $os=Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+      if(-not $Caption){$Caption=[string]$os.Caption}
+      if($Build -le 0){$Build=[int]$os.BuildNumber}
+    }catch{if($Build -le 0){$Build=[Environment]::OSVersion.Version.Build}}
+  }
+  $is64=if($null -ne $Is64Bit){[bool]$Is64Bit}else{[Environment]::Is64BitOperatingSystem}
+  $architecture=if($is64){'x64'}else{'x86'}
+  $targets=New-Object System.Collections.Generic.List[string]
+  if($Caption -match 'Windows 11' -or $Build -ge 22000){
+    $targets.Add('windows-11-'+$architecture)
+    $targets.Add('windows-10-'+$architecture)
+  }else{$targets.Add('windows-10-'+$architecture)}
+  return @($targets.ToArray())
+}
+function Get-GSDrpLinksFromHtml([string]$Body) {
+  $found=New-Object System.Collections.Generic.List[string]
+  if(-not $Body){return @()}
+  $regex='https?:(?:\\?/\\?/|//)dl\.driverpack\.io[^"''<>\s]+?\.zip'
+  foreach($m in [regex]::Matches($Body,$regex,[System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+    $candidate=[System.Net.WebUtility]::HtmlDecode($m.Value.Replace('\/','/'))
+    try {
+      $uri=[uri]$candidate
+      if($uri.Scheme -eq 'https' -and $uri.Host -eq 'dl.driverpack.io' -and !$found.Contains($candidate)){$found.Add($candidate)}
+    } catch {}
+  }
+  return @($found.ToArray())
+}
 function Get-DynamicDrpLinks($dev) {
   $keys=@(Get-DrpLookupKeys $dev)
   if($keys.Count -eq 0){return @()}
-  $windows='windows-10'
-  try {
-    $os=Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-    if([string]$os.Caption -match 'Windows 11'){$windows='windows-11'}
-  } catch {
-    if([Environment]::OSVersion.Version.Build -ge 22000){$windows='windows-11'}
-  }
-  $architecture=if([Environment]::Is64BitOperatingSystem){'x64'}else{'x86'}
-  $osTarget=$windows+'-'+$architecture
+  $osTargets=@(Get-GSDrpOsTargets)
   $cacheRoot=Join-Path $script:StateDir 'drp-metadata'
   if(!(Test-Path -LiteralPath $cacheRoot)){New-Item -ItemType Directory -Path $cacheRoot -Force|Out-Null}
-  $regex='https?:(?:\\?/\\?/|//)dl\.driverpack\.io[^"''<>\s]+?\.zip'
   foreach($key in $keys) {
+   foreach($osTarget in $osTargets) {
     $encoded=[uri]::EscapeDataString($key)
     $url="https://driverpack.io/en/hwids/$encoded`?os=$osTarget"
     $sha=[System.Security.Cryptography.SHA256]::Create()
@@ -53,15 +81,9 @@ function Get-DynamicDrpLinks($dev) {
       }catch{Remove-Item -LiteralPath $tempHtml,$html,$cacheInfo -Force -ErrorAction SilentlyContinue;Log ('DRP metadata rejected: '+$_.Exception.Message);continue}
     }
     try{$body=[System.IO.File]::ReadAllText($html)}catch{Log ('Не удалось прочитать страницу DRP: '+$_.Exception.Message);continue}
-    $found=New-Object System.Collections.Generic.List[string]
-    foreach($m in [regex]::Matches($body,$regex,[System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-      $candidate=[System.Net.WebUtility]::HtmlDecode($m.Value.Replace('\/','/'))
-      try {
-        $uri=[uri]$candidate
-        if($uri.Scheme -eq 'https' -and $uri.Host -eq 'dl.driverpack.io' -and !$found.Contains($candidate)){$found.Add($candidate)}
-      } catch {}
-    }
-    if($found.Count){Log "DRP нашёл $($found.Count) ZIP-пакет(а) по ID $key";return @($found.ToArray())}
+    $found=@(Get-GSDrpLinksFromHtml $body)
+    if($found.Count){Log "DRP нашёл $($found.Count) ZIP-пакет(а) по ID $key в каталоге $osTarget; INF и подпись будут проверены до установки";return @($found)}
+   }
   }
   Log 'В каталоге DRP не найден ZIP ни для одного Hardware ID устройства.'
   if($dev.instanceId -and -not $script:GSDeviceOutcome.ContainsKey([string]$dev.instanceId)){$script:GSDeviceOutcome[[string]$dev.instanceId]='NotFound'}

@@ -84,7 +84,8 @@ try{
   }
   if($devices.Count){
    $remainingSelected=@(Get-RemainingSelectedProblemDevices (Load-JsonFile $script:DeviceFile @()) $devices.ToArray())
-   if($remainingSelected.Count){$script:SelectedTask.errors++;$script:SelectedTask.lastError=('После DRP и доступного резерва осталось устройств без подтверждённой установки: '+$remainingSelected.Count);Write-SelectedLog $script:SelectedTask.lastError}
+   if($remainingSelected.Count -and $script:SelectedTask.needReboot){Write-SelectedLog ('После установки остаются устройства для повторной проверки: '+$remainingSelected.Count+'. Операция не считается ошибкой до обязательной перезагрузки и нового сканирования.')}
+   elseif($remainingSelected.Count){$script:SelectedTask.errors++;$script:SelectedTask.lastError=('После DRP и доступного резерва осталось устройств без подтверждённой установки: '+$remainingSelected.Count);Write-SelectedLog $script:SelectedTask.lastError}
   }
  }elseif($Mode -eq 'download'){
   Save-JsonFile $script:DeviceFile $originalInventory
@@ -92,7 +93,7 @@ try{
  if(Test-Path -LiteralPath (Join-Path $script:StateDir 'cancel.flag')){Set-SelectedStatus 'Остановлено' 'Операция остановлена. Выполненные шаги сохранены.'}
  elseif($script:SelectedTask.errors){Set-SelectedStatus 'Завершено с ошибками' ('Завершено с ошибками: '+$script:SelectedTask.lastError)}
  elseif($Mode -eq 'download'){Set-SelectedStatus 'Готово' 'Отмеченные доступные пакеты скачаны. Установка не выполнялась.'}
- elseif($script:SelectedTask.needReboot){Set-SelectedStatus 'Готово' 'Выбранные компоненты обработаны. Для завершения части обновлений требуется перезагрузка.'}
+ elseif($script:SelectedTask.needReboot){Set-SelectedStatus 'Ожидается перезагрузка' 'Часть драйверов установлена или отложена. Перезагрузите Windows, затем снова откройте раздел «Драйверы», выполните сканирование и установите оставшиеся позиции.'}
  else{Set-SelectedStatus 'Готово' 'Выбранные драйверы и библиотеки обработаны.'}
 }catch [System.OperationCanceledException]{Set-SelectedStatus 'Остановлено' $_.Exception.Message}
 catch{$script:SelectedTask.errors++;$script:SelectedTask.lastError=$_.Exception.Message;Write-SelectedLog ('ОШИБКА: '+$_.Exception.Message);Set-SelectedStatus 'Ошибка' $_.Exception.Message}
