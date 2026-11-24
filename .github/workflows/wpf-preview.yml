@@ -2,7 +2,7 @@ name: Garant Store Next — Windows setup preview
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, next]
     paths:
       - 'WPF/**'
       - 'CI/**'

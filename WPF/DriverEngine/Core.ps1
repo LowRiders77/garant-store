@@ -129,10 +129,17 @@ function Get-TargetDevices {
     if ($ids.Count -eq 0) {
       try { $pn = Get-PnpDeviceProperty -InstanceId $d.PNPDeviceID -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop; $ids = @($pn.Data) } catch {}
     }
-    $key = if ($ids.Count) { [string]$ids[0] } else { [string]$d.PNPDeviceID }
+    $compatible=@()
+    if(Get-Command Get-PnpDeviceProperty -ErrorAction SilentlyContinue){
+      try{
+        $cp=Get-PnpDeviceProperty -InstanceId ([string]$d.PNPDeviceID) -KeyName 'DEVPKEY_Device_CompatibleIds' -ErrorAction Stop
+        $compatible=@($cp.Data|Where-Object{![string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})
+      }catch{}
+    }
+    $key = if ($ids.Count) { [string]$ids[0] } elseif($compatible.Count){[string]$compatible[0]} else { [string]$d.PNPDeviceID }
     $kind = if ($isGpu) {'GPU'} elseif ($code -eq 28) {'Missing'} else {'Issue'}
     $description = if ([string]::IsNullOrWhiteSpace($d.Name)) {'Неизвестное устройство'} else {[string]$d.Name}
-    $items.Add([pscustomobject]@{instanceId=[string]$d.PNPDeviceID;name=$description; kind=$kind; code=$code; reason=$(if($code -eq 28){'Драйвер не установлен'}elseif($vendorPanelMissing -eq '10DE'){'Драйвер без панели NVIDIA (из Windows Update). Нужен официальный драйвер NVIDIA'}elseif($vendorPanelMissing -eq '1002'){'Драйвер без AMD Software (из Windows Update). Нужен официальный драйвер AMD'}elseif($isGpu){'Используется базовый видеодрайвер'}else{'Код состояния устройства: '+$code}); hardwareIds=@($ids); hwid=$key; category=[string]$d.PNPClass; vendor=$(if($key -match 'VEN_([0-9A-Fa-f]{4})'){$Matches[1].ToUpper()}else{''})})
+    $items.Add([pscustomobject]@{instanceId=[string]$d.PNPDeviceID;name=$description; kind=$kind; code=$code; reason=$(if($code -eq 28){'Драйвер не установлен'}elseif($vendorPanelMissing -eq '10DE'){'Драйвер без панели NVIDIA (из Windows Update). Нужен официальный драйвер NVIDIA'}elseif($vendorPanelMissing -eq '1002'){'Драйвер без AMD Software (из Windows Update). Нужен официальный драйвер AMD'}elseif($isGpu){'Используется базовый видеодрайвер'}else{'Код состояния устройства: '+$code}); hardwareIds=@($ids);compatibleIds=@($compatible); hwid=$key; category=[string]$d.PNPClass; vendor=$(if($key -match 'VEN_([0-9A-Fa-f]{4})'){$Matches[1].ToUpper()}else{''})})
   }
   return @($items.ToArray() | Sort-Object @{Expression={if($_.kind -eq 'GPU'){0}else{1}}},name)
 }
@@ -264,7 +271,16 @@ function Get-SystemLibrarySuggestions {
 }
 function Get-NormalIds($dev) {
   $keys = New-Object System.Collections.Generic.List[string]
-  foreach ($id in @($dev.hardwareIds)) {
+  # Search sources with the same ranked identity set Windows PnP uses for INF
+  # selection. Some devices expose the useful generic match only through
+  # DEVPKEY_Device_CompatibleIds; ignoring it made valid chipset/audio packages
+  # invisible even though the later INF verifier would have accepted them.
+  $reportedIds=New-Object System.Collections.Generic.List[string]
+  foreach($propertyName in @('hardwareIds','compatibleIds')){
+    $property=$dev.PSObject.Properties[$propertyName]
+    if($null -ne $property){foreach($reportedId in @($property.Value)){if($reportedId){$reportedIds.Add([string]$reportedId)}}}
+  }
+  foreach ($id in @($reportedIds.ToArray())) {
     if (!$id) {continue}
     $id = ([string]$id).ToUpperInvariant()
     $keys.Add($id)

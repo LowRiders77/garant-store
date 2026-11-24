@@ -7,6 +7,11 @@ $script:GSDeviceOutcome=@{}
 $script:LastFetchOutcome=''
 $script:GSBlockedLogged=@{}
 $script:Task = [ordered]@{scanned=$false;running=$true; action=$Action; phase='Подготовка'; message='Запуск'; total=0; remaining=0; finished=0; downloaded=0; errors=0; bytes=0; expectedBytes=0; speedBps=0; etaSec=-1; percent=-1; currentIndex=0; packagesTotal=0; resumedBytes=0; current=''; actionTargetIds=@(); stageTimings=@{};systemProfile=$null;started=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); updatedAt=(Get-Date).ToString('HH:mm:ss'); finishedAt=''; lastError=''; needReboot=$false}
+$script:GSOperationId=(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+$script:GSOperationDir=Join-Path $script:LogDir 'Operations'
+if(!(Test-Path -LiteralPath $script:GSOperationDir)){New-Item -ItemType Directory -Path $script:GSOperationDir -Force|Out-Null}
+$script:GSOperationLog=Join-Path $script:GSOperationDir ($script:GSOperationId+'-'+$Action+'.log')
+$script:GSDecisionLog=Join-Path $script:LogDir 'device-decisions.jsonl'
 function Write-Status([string]$phase,[string]$message) {
   $script:Task.phase=$phase; $script:Task.message=$message; $script:Task.updatedAt=(Get-Date).ToString('HH:mm:ss')
   Save-JsonFile $script:StatusFile $script:Task
@@ -14,7 +19,16 @@ function Write-Status([string]$phase,[string]$message) {
 function Log([string]$msg) {
   $line='['+(Get-Date -Format 'HH:mm:ss')+'] '+$msg
   Add-Content -LiteralPath $script:LatestLog -Value $line -Encoding UTF8
+  Add-Content -LiteralPath $script:GSOperationLog -Value $line -Encoding UTF8
   Write-Host $line
+}
+function Get-GSObjectValue($Object,[string]$Name,$Default=''){
+  if($null -eq $Object){return $Default};$p=$Object.PSObject.Properties[$Name];if($null -eq $p -or $null -eq $p.Value){return $Default};return $p.Value
+}
+function Write-GSDeviceDecision{
+  param($Device,[string]$Decision,[string]$Reason,[string]$Source='',[string]$PackageUrl='',[string]$PackageVersion='',[string]$Inf='',[Nullable[int]]$PnPUtilExit=$null,[bool]$RebootRequired=$false,[string]$FinalState='')
+  $row=[ordered]@{timestamp=(Get-Date).ToString('o');operationId=$script:GSOperationId;deviceName=[string](Get-GSObjectValue $Device 'name' '');instanceId=[string](Get-GSObjectValue $Device 'instanceId' '');hardwareIds=@(Get-GSObjectValue $Device 'hardwareIds' @());compatibleIds=@(Get-GSObjectValue $Device 'compatibleIds' @());problemCode=[int](Get-GSObjectValue $Device 'code' 0);source=$Source;packageUrl=$PackageUrl;packageVersion=$PackageVersion;selectedInf=$Inf;decision=$Decision;reason=$Reason;pnputilExit=$PnPUtilExit;rebootRequired=$RebootRequired;finalState=$FinalState}
+  Add-Content -LiteralPath $script:GSDecisionLog -Value (ConvertTo-Json -InputObject $row -Depth 6 -Compress) -Encoding UTF8
 }
 function Get-CurrentTargets {
   $watch=[System.Diagnostics.Stopwatch]::StartNew()
@@ -70,6 +84,18 @@ function Test-Archive([string]$path) {
     $zip=[System.IO.Compression.ZipFile]::OpenRead($path)
     try { return $zip.Entries.Count -gt 0 } finally {$zip.Dispose()}
   } catch { return $false }
+}
+function Test-GSCachedPackage([string]$Path,[string]$ManifestPath,[string]$Url,[string]$Kind,$Package){
+  if(!(Test-GSCacheManifest -Path $Path -ManifestPath $ManifestPath -Url $Url)){return $false}
+  try{
+    if($Kind -eq 'Zip'){return (Test-Archive $Path)}
+    if($Kind -in @('NvidiaGPU','AmdGPU')){return (Test-GSVendorSignature $Path $Kind)}
+    if($Kind -eq 'IntelGPU'){
+      $sha=(Get-FileHash -LiteralPath $Path -Algorithm SHA512).Hash.ToLowerInvariant()
+      return ($sha -eq [string]$Package.sha512 -and (Test-GSVendorSignature $Path $Kind))
+    }
+    return $false
+  }catch{return $false}
 }
 # Track the actual response headers as the file grows; no separate HEAD request needed.
 function Get-ExpectedDownloadLength([string]$headerPath,[long]$originalSize) {
@@ -226,10 +252,11 @@ function Curl-Fetch([string]$url,[string]$destination,[bool]$isHtml=$false,[long
   }
   return $false
 }
-function Install-MatchingInf([string]$folder,$targets,[string]$PackageName='') {
+function Install-MatchingInf([string]$folder,$targets,[string]$PackageName='',[string]$PackageUrl='') {
   # One best INF per device, chosen from parsed model sections (exact Hardware ID
-  # of THAT device, applicable architecture/build, same device class, no FORCED
-  # packages). Rollback snapshot before, PnP/audio verification after.
+  # of THAT device, applicable architecture/build and same device class). A DRP
+  # FORCED path label never enables a forced install. Rollback snapshot before,
+  # PnP/audio verification after.
   $infs=@(Get-ChildItem -Path $folder -Filter '*.inf' -Recurse -File -ErrorAction SilentlyContinue)
   if(!$infs.Count){return}
   $arch=if([Environment]::Is64BitOperatingSystem){'x64'}else{'x86'}
@@ -239,37 +266,54 @@ function Install-MatchingInf([string]$folder,$targets,[string]$PackageName='') {
   foreach($t in @($targets)){
     $sel=Select-GSInfForDevice -Device $t -Models $models -PackageName $PackageName
     if($null -eq $sel.Model){
-      if($PackageName){Log ([string]$t.name+': '+$sel.Reason);$script:GSDeviceOutcome[[string]$t.instanceId]='Incompatible'}
+      if($PackageName){Log ([string]$t.name+': '+$sel.Reason);$script:GSDeviceOutcome[[string]$t.instanceId]='Incompatible';Write-GSDeviceDecision -Device $t -Decision 'Rejected' -Reason $sel.Reason -Source 'DriverPack' -PackageUrl $PackageUrl}
       continue
     }
-    Log ([string]$t.name+': '+(Split-Path $sel.Model.Path -Leaf)+' — '+$sel.Reason+' ('+$sel.MatchedId+')')
+    $trust=Test-GSInfPackageTrust -Model $sel.Model
+    if(-not $trust.Trusted){
+      $reason=$trust.Reason+'; INF '+(Split-Path $sel.Model.Path -Leaf)
+      Log ([string]$t.name+': '+$reason)
+      $script:GSDeviceOutcome[[string]$t.instanceId]='Untrusted'
+      Write-GSDeviceDecision -Device $t -Decision 'TrustRejected' -Reason $reason -Source $(if($PackageUrl){'DriverPack'}else{'Локальный пакет'}) -PackageUrl $PackageUrl -PackageVersion ([string]$sel.Model.DriverVersion) -Inf $sel.Model.Path
+      continue
+    }
+    Log ([string]$t.name+': '+(Split-Path $sel.Model.Path -Leaf)+' — '+$sel.Reason+' ('+$sel.MatchedId+'); подпись: '+$trust.Signer)
+    Write-GSDeviceDecision -Device $t -Decision 'Selected' -Reason ($sel.Reason+'; '+$trust.Reason) -Source $(if($PackageUrl){'DriverPack'}else{'Локальный пакет'}) -PackageUrl $PackageUrl -PackageVersion ([string]$sel.Model.DriverVersion) -Inf $sel.Model.Path
     if(-not $plan.Contains($sel.Model.Path)){$plan[$sel.Model.Path]=New-Object System.Collections.Generic.List[object]}
     $plan[$sel.Model.Path].Add($t)
   }
   Log "Найдено INF: $($infs.Count), выбрано для установки: $($plan.Count)"
   if(!$plan.Count){return}
-  $planned=@($plan.Values|ForEach-Object{$_})
+  $planned=@($plan.Values|ForEach-Object{ConvertTo-GSStableArray $_})
   try{$snapshot=Save-GSRollbackSnapshot -Targets $planned -Directory (Join-Path $script:StateDir 'Rollback');if($snapshot){Log ('Сведения для отката сохранены: '+(Split-Path $snapshot -Leaf))}}catch{Log ('Снимок для отката не сохранён: '+$_.Exception.Message)}
   $audio=@($planned|Where-Object{Test-GSAudioDevice $_})
   $audioBefore=if($audio.Count){Get-GSAudioHealth}else{$null}
   foreach ($inf in $plan.Keys) {
     Write-Status 'Установка' (Split-Path $inf -Leaf)
     Log "Установка INF: $(Split-Path $inf -Leaf)"
-    $out=Join-Path $script:StateDir 'pnputil_out.txt'
-    $err=Join-Path $script:StateDir 'pnputil_err.txt'
+    $resultName=([IO.Path]::GetFileNameWithoutExtension($inf) -replace '[^A-Za-z0-9_.-]','_')+'-'+(Get-Date -Format 'HHmmssfff')
+    $out=Join-Path $script:StateDir ('pnputil-'+$resultName+'.out.txt')
+    $err=Join-Path $script:StateDir ('pnputil-'+$resultName+'.err.txt')
     $installTimer=[System.Diagnostics.Stopwatch]::StartNew()
     $proc=Start-Process -FilePath "$env:WINDIR\System32\pnputil.exe" -ArgumentList @('/add-driver',('"'+$inf+'"'),'/install') -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
     $installTimer.Stop();$installPrior=[long]0;if($script:Task.stageTimings.ContainsKey('installMs')){$installPrior=[long]$script:Task.stageTimings.installMs};$script:Task.stageTimings.installMs=$installPrior+$installTimer.ElapsedMilliseconds
     Log ('Время pnputil: '+$installTimer.ElapsedMilliseconds+' мс; INF '+(Split-Path $inf -Leaf))
     $code=$proc.ExitCode
     $content=Get-Content $out -Raw -ErrorAction SilentlyContinue
+    $errorContent=Get-Content $err -Raw -ErrorAction SilentlyContinue
     if ($content) {Log (($content -split '\r?\n' | Where-Object {$_ -match 'installed on device|Установлен.*устройств|Driver package added|успешно|reboot|перезагруз'} | Select-Object -First 8) -join ' | ')}
+    if($errorContent){Log ('PnPUtil stderr: '+(($errorContent -replace '\s+',' ').Trim()))}
     if ($code -eq 3010) {$script:Task.needReboot=$true}
-    if ($code -notin @(0,259,3010)) {$script:Task.errors++;Log "PnPUtil завершился с кодом $code"}
+    if ($code -notin @(0,3010)) {$script:Task.errors++;Log "PnPUtil завершился с кодом $code"}
+    foreach($target in (ConvertTo-GSStableArray $plan[$inf])){Write-GSDeviceDecision -Device $target -Decision $(if($code -in @(0,3010)){'PnPUtilCompleted'}else{'PnPUtilFailed'}) -Reason $(if($code -in @(0,3010)){'PnPUtil принял пакет; окончательный результат проверяется повторным сканированием'}else{'PnPUtil вернул ошибку; см. отдельные stdout/stderr в диагностике'}) -Source $(if($PackageUrl){'DriverPack'}else{'Локальный пакет'}) -PackageUrl $PackageUrl -Inf $inf -PnPUtilExit $code -RebootRequired ($code -eq 3010)}
   }
   $newTargets=@(Get-CurrentTargets)
   $stillIds=@($newTargets|ForEach-Object{[string]$_.instanceId})
-  foreach($t in $planned){$script:GSDeviceOutcome[[string]$t.instanceId]=if($stillIds -contains [string]$t.instanceId){'Failed'}else{'Installed'}}
+  foreach($t in $planned){
+    $remaining=$stillIds -contains [string]$t.instanceId
+    $script:GSDeviceOutcome[[string]$t.instanceId]=if($remaining){'Failed'}else{'Installed'}
+    Write-GSDeviceDecision -Device $t -Decision 'Verified' -Reason $(if($remaining){'После повторного сканирования устройство всё ещё требует драйвер'}elseif($script:Task.needReboot){'Устройство больше не имеет исходной ошибки; для части операции запрошена перезагрузка'}else{'Устройство больше не имеет исходной ошибки'}) -Source $(if($PackageUrl){'DriverPack'}else{'Локальный пакет'}) -PackageUrl $PackageUrl -FinalState $(if($remaining){'StillProblem'}elseif($script:Task.needReboot){'InstalledRebootRequired'}else{'InstalledVerified'}) -RebootRequired $script:Task.needReboot
+  }
   if($audio.Count){
     $cmp=Compare-GSAudioHealth -Before $audioBefore -After (Get-GSAudioHealth)
     $script:Task.audioCheck=[ordered]@{state=$cmp.State;endpoints=$cmp.Endpoints;text=$cmp.Text}
@@ -280,13 +324,19 @@ function Install-MatchingInf([string]$folder,$targets,[string]$PackageName='') {
   Save-JsonFile $script:StatusFile $script:Task
 }
 function Run-Install($packages,$install,$original) {
+  $prepared=New-Object System.Collections.Generic.List[object]
   $i=0
   foreach ($pkg in $packages) {
     if (Test-Path (Join-Path $script:StateDir 'cancel.flag')) {throw [System.OperationCanceledException]::new('Операция отменена пользователем')}
     $i++
     $filename=[System.IO.Path]::GetFileName(([uri]$pkg.url).AbsolutePath)
+    # Cache identity is URL-specific. Packages with the same filename but a
+    # different version/source can no longer overwrite or reuse each other.
+    $urlKey=Get-GSPackageCacheKey ([string]$pkg.url)
+    $packageRoot=Join-Path $script:EngineDownloadDir $urlKey
+    if(!(Test-Path -LiteralPath $packageRoot)){New-Item -ItemType Directory -Path $packageRoot -Force|Out-Null}
     # Download and verify inside the trusted engine folder; the user gets a copy.
-    $path=Join-Path $script:EngineDownloadDir $filename
+    $path=Join-Path $packageRoot $filename
     $script:Task.current=$filename
     $script:Task.currentIndex=$i
     $script:Task.packagesTotal=@($packages).Count
@@ -296,15 +346,11 @@ function Run-Install($packages,$install,$original) {
     $script:Task.percent=-1
     Write-Status 'Загрузка' "Пакет $i из $($packages.Count): $filename"
     Log "Пакет $i/$($packages.Count): $filename"
-    $isValid=$false
-    if (Test-Path $path) {
-      if ($pkg.kind -eq 'Zip') {$isValid=Test-Archive $path}
-      elseif ($pkg.kind -in @('NvidiaGPU','AmdGPU')) {$isValid=Test-GSVendorSignature $path $pkg.kind}
-      else {
-        if ((Get-Item $path).Length -gt 100MB) {$sha=(Get-FileHash $path -Algorithm SHA512).Hash.ToLowerInvariant();$isValid=($sha -eq $pkg.sha512)}
-      }
-    }
+    $manifestPath=Join-Path $packageRoot 'package.json'
+    $isValid=Test-GSCachedPackage -Path $path -ManifestPath $manifestPath -Url ([string]$pkg.url) -Kind ([string]$pkg.kind) -Package $pkg
     if (!$isValid) {
+      if(Test-Path -LiteralPath $path){Log 'Кэш пакета не подтверждён манифестом и SHA-256; файл не используется повторно';Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}
+      Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
       $partial=$path+'.partial'
       # Keep .partial on interruption and resume from the previous byte on the next run.
       $pkgReferer=if($pkg.PSObject.Properties['referer'] -and $pkg.referer){[string]$pkg.referer}else{'https://driverpack.io/'}
@@ -318,6 +364,7 @@ function Run-Install($packages,$install,$original) {
         if($signature.Status -ne 'Valid' -or [string]$signature.SignerCertificate.Subject -notmatch '(?i)Intel') {Log ('ОШИБКА: подпись Intel Graphics не подтверждена: '+[string]$signature.Status);$script:Task.errors++;Remove-Item $partial -Force;continue}
       }
       Move-Item $partial $path -Force
+      Save-JsonFile $manifestPath ([pscustomobject]@{url=[string]$pkg.url;fileName=$filename;downloadedUtc=(Get-Date).ToUniversalTime().ToString('o');bytes=[long](Get-Item $path).Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()})
       Log 'Файл скачан и проверен'
     } else {Log 'Найден в кэше, повторная загрузка не нужна'}
     if (Publish-GSUserCopy -Path $path -UserDirectory $script:DownloadDir) {Log ('Копия сохранена в папке пользователя: '+$script:DownloadDir)}
@@ -327,7 +374,37 @@ function Run-Install($packages,$install,$original) {
     $script:Task.etaSec=0
     $script:Task.percent=100
     Save-JsonFile $script:StatusFile $script:Task
-    if (!$install) {continue}
+    $prepared.Add([pscustomobject]@{Package=$pkg;Path=$path;FileName=$filename;UrlKey=$urlKey;ExpandedPath=''})
+  }
+  if (!$install) {return}
+
+  # Phase 2: unpack every verified archive before the first driver is changed.
+  # This prevents a half-downloaded batch from turning into a partial install.
+  $expandIndex=0
+  foreach($item in (ConvertTo-GSStableArray $prepared)){
+    if (Test-Path (Join-Path $script:StateDir 'cancel.flag')) {throw [System.OperationCanceledException]::new('Операция отменена пользователем')}
+    $pkg=$item.Package
+    if($pkg.kind -ne 'Zip'){continue}
+    $expandIndex++
+    $folder=Join-Path $script:CacheDir $item.UrlKey
+    Write-Status 'Распаковка' ("Архив ${expandIndex}: "+$item.FileName)
+    Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+    try{
+      $expanded=Expand-GSSafeArchive -Archive $item.Path -Destination $folder
+      $item.ExpandedPath=$folder
+      Log ('ZIP распакован безопасно: '+$item.FileName+'; файлов '+$expanded.Entries+', байт '+$expanded.ExpandedBytes)
+    }catch{
+      Log ('Ошибка распаковки '+$item.FileName+': '+$_.Exception.Message)
+      $script:Task.errors++
+      Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  # Phase 3: install only after the complete download/extraction phase. Package
+  # order is already dependency-aware (chipset/Serial IO before audio/children).
+  foreach($item in (ConvertTo-GSStableArray $prepared)){
+    if (Test-Path (Join-Path $script:StateDir 'cancel.flag')) {throw [System.OperationCanceledException]::new('Операция отменена пользователем')}
+    $pkg=$item.Package;$path=$item.Path;$filename=$item.FileName
     $newTargets=@(Get-CurrentTargets)
     if ($pkg.kind -eq 'NvidiaGPU') {
       Write-Status 'Установка' ('Официальный драйвер NVIDIA '+$pkg.version+' — несколько минут, экран может мигнуть')
@@ -362,14 +439,8 @@ function Run-Install($packages,$install,$original) {
     } else {
       $packageTargets=@(Get-PackageTargets $pkg $newTargets $script:actionTargetIds)
       if($packageTargets.Count -eq 0){Log ('Архив не относится к выбранным устройствам: '+$pkg.label);continue}
-      $folder=Join-Path $script:CacheDir ([System.IO.Path]::GetFileNameWithoutExtension($filename))
-      if (!(Test-Path $folder)) {New-Item -ItemType Directory $folder -Force | Out-Null}
-      $infs=@(Get-ChildItem $folder -Filter '*.inf' -File -Recurse -ErrorAction SilentlyContinue)
-      if (!$infs.Count) {
-        Write-Status 'Распаковка' $filename
-        try {Add-Type -AssemblyName System.IO.Compression.FileSystem;[System.IO.Compression.ZipFile]::ExtractToDirectory($path,$folder)} catch {Log "Ошибка распаковки: $($_.Exception.Message)";$script:Task.errors++;continue}
-      }
-      Install-MatchingInf $folder $packageTargets $filename
+      if(-not $item.ExpandedPath -or !(Test-Path -LiteralPath $item.ExpandedPath)){Log ('Архив пропущен: безопасная распаковка не завершена — '+$filename);continue}
+      Install-MatchingInf $item.ExpandedPath $packageTargets $filename ([string]$pkg.url)
     }
     $newTargets=@(Get-CurrentTargets)
     $script:Task.remaining=$newTargets.Count
@@ -464,7 +535,7 @@ try {
       foreach ($zip in $archives) {
         if (!(Test-Archive $zip.FullName)) {continue}
         $target=Join-Path $zip.DirectoryName ([System.IO.Path]::GetFileNameWithoutExtension($zip.Name)+'.extracted')
-        try {Add-Type -AssemblyName System.IO.Compression.FileSystem;[System.IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName,$target)}catch{Log "Ошибка ZIP: $($zip.Name)"}
+        try {$expanded=Expand-GSSafeArchive -Archive $zip.FullName -Destination $target;Log ('Локальный ZIP проверен и распакован: '+$zip.Name+'; файлов '+$expanded.Entries)}catch{Log ('Ошибка ZIP '+$zip.Name+': '+$_.Exception.Message);Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue}
       }
       Install-MatchingInf $staging @(Get-CurrentTargets)
       Install-MatchingInf $script:CacheDir @(Get-CurrentTargets)
@@ -481,10 +552,11 @@ try {
     if ($Action -ne 'download') {
       # Only the trusted cache is used automatically. Packages the user placed in
       # Downloads are installed through the explicit «Установить из папки» action.
-      Log 'Проверяю ранее распакованные INF из защищённого кэша...'
-      Install-MatchingInf $script:CacheDir $selected
-      $selected=@(Get-CurrentTargets | Where-Object {$selected.instanceId -contains $_.instanceId})
-      Log "После проверки локальных INF требуется драйверов: $($selected.Count)"
+      # Automatic flow is deterministic: scan -> download all DRP packages ->
+      # unpack all -> install. Arbitrary stale extracted INF are never installed
+      # before the selected batch. User folders remain available via "Из папки".
+      $selectedIds=@($selected|ForEach-Object{[string]$_.instanceId})
+      $selected=@(Get-GSUnresolvedTargets (Get-CurrentTargets) $selectedIds)
     }
     $script:actionTargetIds=@($selected|ForEach-Object{[string]$_.instanceId})
     $packages=@(Get-Packages $selected)

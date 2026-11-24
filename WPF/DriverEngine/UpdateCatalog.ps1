@@ -32,9 +32,44 @@ function Get-GSWuaInstallOutcome([int]$ResultCode,[int]$HResult){
  # better driver that is already installed: nothing to do, not a failure.
  if($ResultCode -in @(2,3)){return 'Installed'}
  if($HResult -eq -2147024637){return 'NotNeeded'}
+ if($HResult -eq -2145124330){return 'PendingRebootOrBusy'}
  return 'Failed'
 }
 function Format-GSHResult([int]$HResult){return ('0x{0:X8}' -f $HResult)}
+
+function Get-GSWuaErrorExplanation([int]$HResult){
+ if($HResult -eq -2145124330){return 'Windows Update не разрешает новую установку: уже выполняется другая установка или Windows ожидает обязательную перезагрузку (0x80240016). Завершите текущую установку и перезагрузите компьютер; автоматический сброс компонентов не выполняется.'}
+ return ('Windows Update вернул '+(Format-GSHResult $HResult)+'.')
+}
+
+function Get-GSPendingRebootReasons{
+ $reasons=New-Object System.Collections.Generic.List[string]
+ foreach($path in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')){
+  if(Test-Path -LiteralPath $path){$reasons.Add($path)}
+ }
+ try{
+  $session=Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction Stop
+  if(@($session.PendingFileRenameOperations).Count){$reasons.Add('PendingFileRenameOperations')}
+ }catch{}
+ try{
+  $volatile=Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Updates' -Name UpdateExeVolatile -ErrorAction Stop
+  if([int]$volatile -ne 0){$reasons.Add('UpdateExeVolatile='+[int]$volatile)}
+ }catch{}
+ return @($reasons.ToArray())
+}
+
+function Get-GSWuaInstallPreflight($PendingReasons,[int]$SelectionCount){
+ $pending=@($PendingReasons|Where-Object{$_})
+ if($pending.Count -eq 0){return [pscustomobject]@{CanInstall=$true;NeedReboot=$false;Deferred=0;Phase='Готово';Message=''}}
+ $message='Перед установкой драйверов Windows Update требуется перезагрузка. Признаки: '+($pending -join ', ')+'. После перезагрузки снова выполните сканирование и установку. Garant-ПО не сбрасывает компоненты Windows Update и не повторяет установку бесконечно.'
+ return [pscustomobject]@{CanInstall=$false;NeedReboot=$true;Deferred=$SelectionCount;Phase='Ожидается перезагрузка';Message=$message}
+}
+
+function Get-GSRemainingDriverOutcome([int]$RemainingCount,[bool]$NeedReboot){
+ if($RemainingCount -le 0){return 'InstalledVerified'}
+ if($NeedReboot){return 'PendingReboot'}
+ return 'Failed'
+}
 
 function Get-MatchedWindowsDriverUpdateIds($Devices,$Updates) {
  $matched=New-Object System.Collections.Generic.List[string]

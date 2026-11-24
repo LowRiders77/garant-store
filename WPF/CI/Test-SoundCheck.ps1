@@ -23,4 +23,10 @@ $no=Get-GSSoundTestVerdict @([pscustomobject]@{Status='OK';Name='Speakers'}) 'No
 Assert ($no.State -eq 'NotHeard' -and $no.Text -notmatch 'подтвержд') 'A driver in OK state must not hide that nothing was heard'
 $xaml=Get-Content -LiteralPath (Join-Path $project 'DriverWindow.xaml') -Raw -Encoding UTF8
 Assert ($xaml -match 'x:Name="DriverSoundTest"') 'Sound test button is missing from the driver window'
-Write-Host 'Sound check gate passed: no endpoint, failed endpoint, audible test, confirmed, not heard, button present.'
+$uiSource=Get-Content -LiteralPath (Join-Path $project 'GarantStore.Drivers.ps1') -Raw -Encoding UTF8
+$speakerStart=$uiSource.IndexOf('function Test-GSDriverSpeakers')
+$speakerEnd=$uiSource.IndexOf('function Save-GSDriverDiagnostics',$speakerStart)
+$speakerBody=$uiSource.Substring($speakerStart,$speakerEnd-$speakerStart)
+Assert ($speakerBody -match 'MessageBox\]::Show\(\$verdict\.Text') 'No-endpoint result must be shown visibly, not only written to a footer'
+Assert ($speakerBody -match 'MessageBox\]::Show\(\$script:driverHint\.Text') 'Missing sample or playback error must be shown visibly'
+Write-Host 'Sound check gate passed: no endpoint, failed endpoint, audible test, confirmed, not heard, visible failure messages, button present.'

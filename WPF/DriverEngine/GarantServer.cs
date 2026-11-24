@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -250,8 +251,14 @@ namespace GarantPO {
   private byte[] Diagnostics() {
    using(MemoryStream m=new MemoryStream()) {
     using(ZipArchive z=new ZipArchive(m,ZipArchiveMode.Create,true)) {
-     string[] files={"Garant-PO-Latest.log","Garant-PO-Interface.log","Garant-PO-Server.log","Worker-stdout.log","Worker-stderr.log","Remaining.csv","Missing-DRP-Links.txt","Garant-PO-Server-Startup-Error.log"};
+     string[] files={"Garant-PO-Latest.log","Garant-PO-Interface.log","Garant-PO-Server.log","Worker-stdout.log","Worker-stderr.log","Remaining.csv","Missing-DRP-Links.txt","Garant-PO-Server-Startup-Error.log","device-decisions.jsonl"};
      foreach(string name in files) AddToZip(z,Path.Combine(logs,name),name);
+     try{
+      string operations=Path.Combine(logs,"Operations");
+      if(Directory.Exists(operations))foreach(string file in Directory.GetFiles(operations,"*.log").OrderByDescending(File.GetLastWriteTimeUtc).Take(30))AddToZip(z,file,"Operations/"+Path.GetFileName(file));
+      foreach(string pattern in new[]{"selected-*.stdout.txt","selected-*.stderr.txt"})foreach(string file in Directory.GetFiles(logs,pattern).OrderByDescending(File.GetLastWriteTimeUtc).Take(20))AddToZip(z,file,"ChildProcesses/"+Path.GetFileName(file));
+      foreach(string pattern in new[]{"pnputil-*.out.txt","pnputil-*.err.txt"})foreach(string file in Directory.GetFiles(state,pattern).OrderByDescending(File.GetLastWriteTimeUtc).Take(40))AddToZip(z,file,"PnPUtil/"+Path.GetFileName(file));
+     }catch(Exception e){Log("ZIP_EXTRA_SKIP "+e.Message);}
      AddToZip(z,Path.Combine(root,"Core.ps1"),"Engine/Core.ps1");
      AddToZip(z,Path.Combine(root,"Worker.ps1"),"Engine/Worker.ps1");
      AddToZip(z,Path.Combine(root,"Catalog.ps1"),"Engine/Catalog.ps1");
@@ -264,11 +271,13 @@ namespace GarantPO {
      AddToZip(z,Path.Combine(root,"RestorePoint.ps1"),"Engine/RestorePoint.ps1");
      AddToZip(z,Path.Combine(root,"WindowsUpdateRepair.ps1"),"Engine/WindowsUpdateRepair.ps1");
      AddToZip(z,Path.Combine(root,"Selected.ps1"),"Engine/Selected.ps1");
+     AddToZip(z,Path.Combine(root,"DriverSafety.ps1"),"Engine/DriverSafety.ps1");
+     AddToZip(z,Path.Combine(root,"SecureRoot.ps1"),"Engine/SecureRoot.ps1");
      string paths="Downloads="+userDownloads+Environment.NewLine+"EngineDownloads="+downloads+Environment.NewLine+"Drivers="+drivers+Environment.NewLine+"Libraries="+ConfiguredPath("GARANT_PO_LIBRARY_DIR",Path.Combine(dataRoot,"Libraries"))+Environment.NewLine;
      byte[] pathBytes=Encoding.UTF8.GetBytes(paths);
      var pathEntry=z.CreateEntry("Garant-PO-Paths.txt",CompressionLevel.Optimal);
      using(var pathStream=pathEntry.Open())pathStream.Write(pathBytes,0,pathBytes.Length);
-     string[] stateFiles={"status.json","devices.json","curl_diagnostics.log","curl_stderr.txt","curl_headers.txt","system-profile.json","device-session.json","device-history.json"};
+     string[] stateFiles={"status.json","devices.json","selection.json","source-health.json","curl_diagnostics.log","curl_stderr.txt","curl_headers.txt","system-profile.json","device-session.json","device-history.json"};
      foreach(string name in stateFiles)AddToZip(z,Path.Combine(state,name),"State/"+name);
     }
     return m.ToArray();

@@ -8,7 +8,7 @@ on:
       - 'GarantStore_CI_Source_20261031.zip.base64'
       - '.github/workflows/bootstrap-source.yml'
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, next]
   workflow_dispatch:
 
 permissions:

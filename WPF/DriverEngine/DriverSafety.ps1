@@ -2,8 +2,10 @@
 #  - Состояние источников: после HTTP 401/403/429/451 источник приостанавливается,
 #    вместо десятков повторных запросов по каждому Hardware ID (поле: DriverPack 403).
 #  - Разбор INF по секциям [Manufacturer]/моделей с учётом архитектуры и сборки
-#    Windows; точное совпадение Hardware ID конкретного устройства; FORCED-пакеты
-#    DRP и INF другого класса устройств не устанавливаются.
+#    Windows; точное совпадение Hardware/Compatible ID конкретного устройства.
+#    Метка FORCED в пути DriverPack сама по себе не является командой PnPUtil:
+#    пакет допускается только после обычной проверки ID, класса и подписи, без
+#    принудительных флагов установки. INF другого класса не устанавливаются.
 #  - Снимок для отката до установки и проверка звука после неё.
 #  - Итог различает: источник недоступен / сеть / пакет не найден / несовместим / установлено.
 
@@ -107,8 +109,20 @@ function Get-GSInfModel{
     if($line -match '^\[(.+)\]$'){$current=$Matches[1].Trim().ToUpperInvariant();if(-not $sections.ContainsKey($current)){$sections[$current]=New-Object System.Collections.Generic.List[string]};continue}
     if($current){$sections[$current].Add($line)}
   }
-  $class='';$provider=''
-  if($sections.ContainsKey('VERSION')){foreach($l in $sections['VERSION']){if($l -match '^(?i)Class\s*=\s*"?([^"]+)"?$'){$class=$Matches[1].Trim()};if($l -match '^(?i)Provider\s*=\s*(.+)$'){$provider=$Matches[1].Trim()}}}
+  $class='';$provider='';$driverDate=[datetime]::MinValue;$driverVersion=[version]'0.0.0.0'
+  $catalogs=New-Object System.Collections.Generic.List[string]
+  if($sections.ContainsKey('VERSION')){foreach($l in $sections['VERSION']){
+    if($l -match '^(?i)Class\s*=\s*"?([^"]+)"?$'){$class=$Matches[1].Trim()}
+    if($l -match '^(?i)Provider\s*=\s*(.+)$'){$provider=$Matches[1].Trim()}
+    if($l -match '^(?i)CatalogFile(?:\.[^=]+)?\s*=\s*"?([^"]+)"?$'){$catalog=$Matches[1].Trim();if($catalog){$catalogs.Add($catalog)}}
+    if($l -match '^(?i)DriverVer\s*=\s*([^,]+),\s*([0-9.]+)'){
+      $dateText=$Matches[1].Trim();$versionText=$Matches[2]
+      $parsedDate=[datetime]::MinValue
+      foreach($format in @('MM/dd/yyyy','M/d/yyyy','yyyy-MM-dd')){if([datetime]::TryParseExact($dateText,$format,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$parsedDate)){break}}
+      if($parsedDate -gt [datetime]::MinValue){$driverDate=$parsedDate}
+      $parsedVersion=[version]'0.0.0.0';if([version]::TryParse($versionText,[ref]$parsedVersion)){$driverVersion=$parsedVersion}
+    }
+  }}
   $ids=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   if($sections.ContainsKey('MANUFACTURER')){
     foreach($l in $sections['MANUFACTURER']){
@@ -129,48 +143,131 @@ function Get-GSInfModel{
       }
     }
   }
-  return [pscustomobject]@{Path=$Path;Class=$class;Provider=$provider;Ids=$ids}
+  return [pscustomobject]@{Path=$Path;Class=$class;Provider=$provider;Ids=$ids;Catalogs=@($catalogs.ToArray());DriverDate=$driverDate;DriverVersion=$driverVersion}
 }
 
-function Test-GSForcedPackage([string]$Name){return ([string]$Name -match '(?i)(^|[-_\\/ ])FORCED([-_\\/ ]|$)')}
+function Test-GSDriverPackForcedLabel([string]$Name){return ([string]$Name -match '(?i)(^|[-_\\/ ])FORCED([-_\\/ ]|$)')}
+
+function Get-GSDeviceMatchIds($Device){
+  # Windows publishes both lists in rank order. Never manufacture a match from
+  # a vendor name: only IDs actually reported by PnP are accepted.
+  $ids=New-Object System.Collections.Generic.List[string]
+  $seen=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  foreach($property in @('hardwareIds','compatibleIds')){
+    $p=$Device.PSObject.Properties[$property]
+    if($null -eq $p){continue}
+    foreach($raw in @($p.Value)){
+      $id=([string]$raw).Trim().Trim('"').ToUpperInvariant()
+      if($id -and $seen.Add($id)){$ids.Add($id)}
+    }
+  }
+  return @($ids.ToArray())
+}
 
 function Get-GSDeviceIdTier([string]$Id){
   if($Id -match '(?i)SUBSYS_'){return 1}
   if($Id -match '(?i)&REV_'){return 2}
-  return 3
+  if($Id -match '(?i)^(PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}|USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}|(?:ACPI\\|\*)[A-Z0-9_&]+)$'){return 3}
+  return 4
 }
 
 function Select-GSInfForDevice{
   # Best INF for ONE device. The match must be one of this device's own
-  # Hardware IDs (most specific first), listed in an applicable model section.
+  # Hardware/Compatible IDs in Windows PnP rank order, listed in an applicable
+  # model section. A DRP path segment named FORCED is metadata, not permission
+  # to force a driver: PnPUtil is still called without /force and Windows keeps
+  # the highest-ranked package.
   # Returns $null with a reason when nothing is safe to install.
   param([Parameter(Mandatory=$true)]$Device,[object[]]$Models,[string]$PackageName='')
-  if(Test-GSForcedPackage $PackageName){return [pscustomobject]@{Model=$null;MatchedId='';Tier=0;Reason='Пакет DRP помечен FORCED (принудительная установка) — автоматически не ставится'}}
-  $deviceIds=@(@($Device.hardwareIds)|Where-Object{$_}|ForEach-Object{([string]$_).ToUpperInvariant()})
+  $sourceMarkedForced=Test-GSDriverPackForcedLabel $PackageName
+  $deviceIds=@(Get-GSDeviceMatchIds $Device)
   $deviceClass=if($Device.PSObject.Properties['category']){[string]$Device.category}else{''}
-  $best=$null;$bestIndex=[int]::MaxValue;$classRejected=$false;$forcedRejected=$false
+  $best=$null;$bestIndex=[int]::MaxValue;$classRejected=$false
   foreach($m in @($Models)){
     if($null -eq $m){continue}
-    if(Test-GSForcedPackage ([string]$m.Path)){
-      foreach($id in $deviceIds){if($m.Ids.Contains($id)){$forcedRejected=$true;break}}
-      continue
-    }
     if($deviceClass -and $m.Class -and $deviceClass -ne $m.Class){
       foreach($id in $deviceIds){if($m.Ids.Contains($id)){$classRejected=$true;break}}
       continue
     }
-    for($i=0;$i -lt $deviceIds.Count -and $i -lt $bestIndex;$i++){
-      if($m.Ids.Contains($deviceIds[$i])){$best=$m;$bestIndex=$i;break}
+    for($i=0;$i -lt $deviceIds.Count;$i++){
+      if(-not $m.Ids.Contains($deviceIds[$i])){continue}
+      $replace=($i -lt $bestIndex)
+      if($i -eq $bestIndex -and $best){
+        $mDate=if($m.PSObject.Properties['DriverDate']){[datetime]$m.DriverDate}else{[datetime]::MinValue}
+        $bestDate=if($best.PSObject.Properties['DriverDate']){[datetime]$best.DriverDate}else{[datetime]::MinValue}
+        $mVersion=if($m.PSObject.Properties['DriverVersion']){[version]$m.DriverVersion}else{[version]'0.0.0.0'}
+        $bestVersion=if($best.PSObject.Properties['DriverVersion']){[version]$best.DriverVersion}else{[version]'0.0.0.0'}
+        if($mDate -gt $bestDate){$replace=$true}
+        elseif($mDate -eq $bestDate -and $mVersion -gt $bestVersion){$replace=$true}
+      }
+      if($replace){$best=$m;$bestIndex=$i}
+      break
     }
   }
   if($null -eq $best){
-    $reason=if($forcedRejected){'Подходит только FORCED-пакет DRP (принудительная установка) — автоматически не ставится'}elseif($classRejected){'INF относится к другому классу устройств — не устанавливается'}else{'Ни один INF не содержит Hardware ID этого устройства'}
-    return [pscustomobject]@{Model=$null;MatchedId='';Tier=0;Reason=$reason}
+    $reason=if($classRejected){'INF относится к другому классу устройств — не устанавливается'}else{'Ни один применимый INF не содержит Hardware ID или Compatible ID этого устройства'}
+    return [pscustomobject]@{Model=$null;MatchedId='';Tier=0;Reason=$reason;SourceMarkedForced=$sourceMarkedForced}
   }
   $matched=$deviceIds[$bestIndex]
   $tier=Get-GSDeviceIdTier $matched
-  $quality=switch($tier){1{'точное совпадение с OEM-подсистемой'}2{'совпадение по ревизии устройства'}default{'общий драйвер производителя чипа (без OEM-подсистемы)'}}
-  return [pscustomobject]@{Model=$best;MatchedId=$matched;Tier=$tier;Reason=$quality}
+  $quality=switch($tier){1{'точное совпадение с OEM-подсистемой'}2{'совпадение по ревизии устройства'}3{'точное совпадение с Hardware/Compatible ID устройства'}default{'совпадение с совместимым классом PnP'}}
+  if($sourceMarkedForced){$quality+='; метка FORCED относится к каталогу DRP, принудительный режим PnPUtil не используется'}
+  return [pscustomobject]@{Model=$best;MatchedId=$matched;Tier=$tier;Reason=$quality;SourceMarkedForced=$sourceMarkedForced}
+}
+
+function Test-GSInfPackageTrust{
+  # Automatic installation requires a catalog next to the selected INF and a
+  # valid Windows Authenticode chain. PnPUtil performs its own kernel-policy
+  # verification too; this is an early, explainable rejection.
+  param([Parameter(Mandatory=$true)]$Model,[scriptblock]$SignatureResolver=$null)
+  $catalogs=@(if($Model.PSObject.Properties['Catalogs']){$Model.Catalogs|Where-Object{$_}})
+  if(-not $catalogs.Count){return [pscustomobject]@{Trusted=$false;Catalog='';Signer='';Reason='В INF не указан файл каталога цифровой подписи'}}
+  foreach($name in $catalogs){
+    $catalogPath=Join-Path (Split-Path -Parent ([string]$Model.Path)) ([IO.Path]::GetFileName([string]$name))
+    if(!(Test-Path -LiteralPath $catalogPath -PathType Leaf)){continue}
+    try{$sig=if($SignatureResolver){& $SignatureResolver $catalogPath}else{Get-AuthenticodeSignature -LiteralPath $catalogPath -ErrorAction Stop}}catch{continue}
+    $status=[string]$sig.Status;$signer='';if($sig.SignerCertificate){$signer=[string]$sig.SignerCertificate.Subject}
+    if($status -eq 'Valid'){return [pscustomobject]@{Trusted=$true;Catalog=$catalogPath;Signer=$signer;Reason='Каталог драйвера имеет действительную цифровую подпись'}}
+  }
+  return [pscustomobject]@{Trusted=$false;Catalog='';Signer='';Reason='Каталог драйвера отсутствует или его цифровая подпись недействительна'}
+}
+
+function Expand-GSSafeArchive([string]$Archive,[string]$Destination,[long]$MaxExpandedBytes=8GB,[int]$MaxEntries=50000){
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $separators=[char[]]@([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+  $root=[IO.Path]::GetFullPath($Destination).TrimEnd($separators)+[IO.Path]::DirectorySeparatorChar
+  if(!(Test-Path -LiteralPath $root)){New-Item -ItemType Directory -Path $root -Force|Out-Null}
+  $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
+  try{
+    if($zip.Entries.Count -le 0 -or $zip.Entries.Count -gt $MaxEntries){throw ('Недопустимое число файлов в архиве: '+$zip.Entries.Count)}
+    [long]$expanded=0
+    foreach($entry in $zip.Entries){
+      $expanded+=[long]$entry.Length;if($expanded -gt $MaxExpandedBytes){throw 'Распакованный архив превышает безопасный предел 8 ГБ'}
+      $relative=([string]$entry.FullName).Replace('/',[IO.Path]::DirectorySeparatorChar)
+      if([IO.Path]::IsPathRooted($relative) -or $relative -match '(^|[\\/])\.\.([\\/]|$)' -or $relative -match ':'){throw ('Небезопасный путь в ZIP: '+$entry.FullName)}
+      $target=[IO.Path]::GetFullPath((Join-Path $root $relative))
+      if(-not $target.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)){throw ('Выход за каталог при распаковке: '+$entry.FullName)}
+      if([string]::IsNullOrEmpty($entry.Name)){if(!(Test-Path -LiteralPath $target)){New-Item -ItemType Directory -Path $target -Force|Out-Null};continue}
+      $parent=Split-Path -Parent $target;if(!(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Path $parent -Force|Out-Null}
+      $input=$entry.Open();try{$output=[IO.File]::Open($target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);try{$input.CopyTo($output)}finally{$output.Dispose()}}finally{$input.Dispose()}
+    }
+    return [pscustomobject]@{Entries=$zip.Entries.Count;ExpandedBytes=$expanded}
+  }finally{$zip.Dispose()}
+}
+
+function Get-GSPackageCacheKey([string]$Url){
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try{return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Url))).Replace('-','').ToLowerInvariant()).Substring(0,20)}finally{$sha.Dispose()}
+}
+
+function Test-GSCacheManifest([string]$Path,[string]$ManifestPath,[string]$Url){
+  if(!(Test-Path -LiteralPath $Path -PathType Leaf) -or !(Test-Path -LiteralPath $ManifestPath -PathType Leaf)){return $false}
+  try{
+    $manifest=Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8|ConvertFrom-Json
+    if([string]$manifest.url -ne $Url -or [long]$manifest.bytes -ne [long](Get-Item -LiteralPath $Path).Length){return $false}
+    $actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    return ($actual -eq ([string]$manifest.sha256).ToLowerInvariant())
+  }catch{return $false}
 }
 
 # ---------------------------------------------------------------- звук
@@ -236,6 +333,7 @@ function Get-GSVendorSupportUrl([string]$Manufacturer,[string]$Model){
   if($m -match 'DELL'){return 'https://www.dell.com/support/home'}
   if($m -match 'MICRO-STAR|MSI'){return 'https://www.msi.com/support'}
   if($m -match 'HUAWEI'){return 'https://consumer.huawei.com/support/'}
+  if($m -match 'AQUARIUS'){return 'https://www.aq.ru/support/download/'}
   return ''
 }
 
@@ -248,9 +346,30 @@ function Format-GSOutcomeSummary{
   if($counts['SourceUnavailable']){$parts+=('источник DriverPack сейчас недоступен (отказ сервера) — не проверено устройств: '+$counts['SourceUnavailable'])}
   if($counts['NetworkError']){$parts+=('нет связи с источником — не проверено устройств: '+$counts['NetworkError'])}
   if($counts['Incompatible']){$parts+=('найден пакет, но он не подходит устройству — не установлен: '+$counts['Incompatible'])}
+  if($counts['Untrusted']){$parts+=('пакет найден, но цифровая подпись каталога не подтверждена — не установлен: '+$counts['Untrusted'])}
   if($counts['Failed']){$parts+=('установка не удалась: '+$counts['Failed'])}
   if($counts['NotFound']){$parts+=('не найден проверенный пакет: '+$counts['NotFound'])}
   if($WindowsUpdateState -eq 'Disabled'){$parts+='служба Windows Update отключена — резервный источник не использован (Garant Store её не включает автоматически)'}
   if($VendorUrl -and ($counts['SourceUnavailable'] -or $counts['NetworkError'] -or $counts['NotFound'])){$parts+=('официальный сайт производителя: '+$VendorUrl)}
   return ($parts -join '; ')
+}
+
+function ConvertTo-GSStableArray($Collection){
+  # Windows PowerShell 5.1 can throw "Argument types do not match" when a
+  # generic List[object] is enumerated through @(...). Materialize it through
+  # ToArray() before it crosses a pipeline/foreach boundary.
+  if($null -eq $Collection){return @()}
+  $method=$Collection.PSObject.Methods['ToArray']
+  if($null -ne $method){return @($Collection.ToArray())}
+  return @($Collection)
+}
+
+function Get-GSUnresolvedTargets($Targets,[string[]]$SelectedInstanceIds){
+  # An empty selection is valid after a successful install. Do not access a
+  # property on an empty array under StrictMode.
+  if($null -eq $SelectedInstanceIds -or $SelectedInstanceIds.Count -eq 0){return @()}
+  return @($Targets|Where-Object{
+    $p=if($null -ne $_){$_.PSObject.Properties['instanceId']}else{$null}
+    $p -and $SelectedInstanceIds -contains [string]$p.Value
+  })
 }
