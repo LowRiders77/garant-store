@@ -39,7 +39,8 @@ try{
  )
  $devices=New-Object System.Collections.Generic.List[object]
  for($i=0;$i -lt $rows.Count;$i++){
-  $device=[pscustomobject]@{instanceId=($rows[$i][0]+'\TEST'+$i);name=('FX505 device '+$i);kind='Missing';code=28;category='';hardwareIds=@($rows[$i][0]);compatibleIds=@()}
+  $isPci=([string]$rows[$i][0] -match '^PCI\\')
+  $device=[pscustomobject]@{instanceId=($rows[$i][0]+'\TEST'+$i);name=('FX505 device '+$i);kind='Missing';code=28;category='';hardwareIds=$(if($isPci){@($rows[$i][0])}else{@($rows[$i][0],$rows[$i][1])});compatibleIds=$(if($isPci){@($rows[$i][1])}else{@()})}
   $keys=@(Get-DrpLookupKeys $device)
   if($keys -notcontains $rows[$i][1]){throw ('Canonical lookup key missing for '+$rows[$i][0]+': '+($keys -join ', '))}
   $devices.Add($device)
