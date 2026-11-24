@@ -1,4 +1,4 @@
-# Regression fixture from Garant-PO-Diagnostics, ASUS TUF Gaming FX505GE,
+﻿# Regression fixture from Garant-PO-Diagnostics, ASUS TUF Gaming FX505GE,
 # Windows 11 Pro 24H2 build 26100, 2026-11-24. This protects the catalog
 # fallback and INF matching paths; it does not claim a physical installation.
 [CmdletBinding()]
